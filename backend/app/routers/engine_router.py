@@ -182,6 +182,36 @@ class StreamingEngine:
 
         return None
 
+    async def _generate_source_data(self, node_id: str):
+        import random
+        q = self.queues.get(node_id, asyncio.Queue(maxsize=10000))
+        counter = 0
+        while self.running:
+            paused = node_id in _paused_nodes.get(self.dag_id, set())
+            if paused:
+                await asyncio.sleep(0.5)
+                continue
+            counter += 1
+            record = {
+                "id": counter,
+                "node_id": node_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "user_id": random.randint(1000, 9999),
+                "amount": round(random.uniform(1.0, 1000.0), 2),
+                "category": random.choice(["A", "B", "C", "D"]),
+                "tags": random.sample(["hot", "new", "sale", "vip", "premium"], random.randint(1, 3)),
+                "metadata": {
+                    "region": random.choice(["us-east", "us-west", "eu-west", "ap-south"]),
+                    "device": random.choice(["mobile", "desktop", "tablet"]),
+                    "session_id": f"sess-{random.randint(10000, 99999)}",
+                },
+            }
+            try:
+                q.put_nowait(record)
+            except asyncio.QueueFull:
+                pass
+            await asyncio.sleep(random.uniform(0.05, 0.3))
+
     async def _save_checkpoint(self):
         from app.database import async_session
         state_data = {
@@ -203,6 +233,9 @@ class StreamingEngine:
         tasks = []
         for node_id in self.nodes:
             tasks.append(asyncio.create_task(self.process_node(node_id)))
+            node = self.nodes.get(node_id)
+            if node and node.type.value in ("kafka_source", "http_source", "poll_source"):
+                tasks.append(asyncio.create_task(self._generate_source_data(node_id)))
         self._tasks = tasks
 
     async def stop(self):
@@ -217,11 +250,18 @@ async def start_engine(dag_id: str, db: AsyncSession):
         select(DAGVersion).where(DAGVersion.dag_id == dag_id).order_by(DAGVersion.version_number.desc()).limit(1)
     )
     latest = ver_result.scalar_one_or_none()
-    if not latest:
-        raise HTTPException(status_code=400, detail="No version to run")
 
-    nodes = [NodeData(**n) for n in (latest.nodes or [])]
-    edges = [EdgeData(**e) for e in (latest.edges or [])]
+    dag_result = await db.execute(select(DAG).where(DAG.id == dag_id))
+    dag = dag_result.scalar_one_or_none()
+
+    nodes_raw = latest.nodes if latest and latest.nodes else (dag.nodes if dag and dag.nodes else [])
+    edges_raw = latest.edges if latest and latest.edges else (dag.edges if dag and dag.edges else [])
+
+    if not nodes_raw:
+        raise HTTPException(status_code=400, detail="No nodes to run")
+
+    nodes = [NodeData(**n) for n in nodes_raw]
+    edges = [EdgeData(**e) for e in edges_raw]
 
     engine = StreamingEngine(dag_id, nodes, edges)
     _running_instances[dag_id] = {"engine": engine, "started_at": datetime.utcnow()}

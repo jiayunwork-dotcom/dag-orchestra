@@ -161,6 +161,14 @@ async def metrics_websocket(websocket: WebSocket, dag_id: str):
         node_ids = [n["id"] for n in (latest.nodes or [])] if latest else []
         edges = latest.edges or [] if latest else []
 
+        if not edges and dag:
+            dag_nodes = dag.nodes or []
+            dag_edges = dag.edges or []
+            if not node_ids and dag_nodes:
+                node_ids = [n["id"] if isinstance(n, dict) else n.id for n in dag_nodes]
+            if not edges and dag_edges:
+                edges = dag_edges
+
         while True:
             await _simulate_node_metrics(dag_id, node_ids)
             metrics = list(_metrics_store.get(dag_id, {}).values())

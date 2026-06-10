@@ -172,7 +172,11 @@ function FlowEdge({
   style,
 }: EdgeProps) {
   const store = useDAGStore();
-  const throughput = store.edgeThroughput[id] || 0;
+  let throughput = store.edgeThroughput[id];
+  if (throughput === undefined || throughput === null) {
+    const srcMetrics = store.metrics[source];
+    throughput = srcMetrics?.throughput ?? 0;
+  }
   const [edgePath] = getBezierPath({
     sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition,
   });
