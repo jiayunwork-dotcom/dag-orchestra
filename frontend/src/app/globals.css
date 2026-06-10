@@ -1,0 +1,77 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-primary: #0f172a;
+  --bg-secondary: #1e293b;
+  --bg-tertiary: #334155;
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --border-color: #475569;
+  --accent: #3b82f6;
+  --accent-hover: #2563eb;
+  --success: #22c55e;
+  --warning: #eab308;
+  --danger: #ef4444;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.react-flow__node {
+  cursor: grab;
+}
+
+.react-flow__node:active {
+  cursor: grabbing;
+}
+
+.react-flow__edge-path {
+  stroke-width: 2;
+}
+
+.react-flow__handle {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg-secondary);
+}
+
+.node-source { border-left: 3px solid #3b82f6; }
+.node-transform { border-left: 3px solid #a855f7; }
+.node-aggregate { border-left: 3px solid #f59e0b; }
+.node-window { border-left: 3px solid #06b6d4; }
+.node-join { border-left: 3px solid #f97316; }
+.node-sink { border-left: 3px solid #22c55e; }
+
+.health-green { background-color: #22c55e20; border: 1px solid #22c55e; }
+.health-yellow { background-color: #eab30820; border: 1px solid #eab308; }
+.health-red { background-color: #ef444420; border: 1px solid #ef4444; }
+
+.schema-error .react-flow__edge-path {
+  stroke: #ef4444 !important;
+  stroke-dasharray: 5 5;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-secondary);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 3px;
+}
