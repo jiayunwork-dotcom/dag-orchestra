@@ -82,6 +82,11 @@ export const engineApi = {
   start: (dagId: string) => api.post(`/engine/${dagId}/start`),
   stop: (dagId: string) => api.post(`/engine/${dagId}/stop`),
   status: (dagId: string) => api.get(`/engine/${dagId}/status`),
+  pauseNode: (dagId: string, nodeId: string) => api.post(`/engine/${dagId}/nodes/${nodeId}/pause`),
+  resumeNode: (dagId: string, nodeId: string) => api.post(`/engine/${dagId}/nodes/${nodeId}/resume`),
+  getNodeSamples: (dagId: string, nodeId: string) => api.get(`/engine/${dagId}/nodes/${nodeId}/samples`),
+  getNodeLogs: (dagId: string, nodeId: string, level?: string) =>
+    api.get(`/engine/${dagId}/nodes/${nodeId}/logs`, { params: level ? { level } : {} }),
 };
 
 export default api;

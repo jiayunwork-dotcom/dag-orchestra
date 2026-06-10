@@ -296,6 +296,22 @@ class PublishRequest(BaseModel):
     grayscale_ratio: int = 0
 
 
+class DataSample(BaseModel):
+    node_id: str
+    samples: list[dict] = Field(default_factory=list)
+
+
+class LogEntry(BaseModel):
+    timestamp: str
+    level: str
+    message: str
+
+
+class NodeLogResponse(BaseModel):
+    node_id: str
+    logs: list[LogEntry] = Field(default_factory=list)
+
+
 class CollabCursor(BaseModel):
     user_id: str
     username: str

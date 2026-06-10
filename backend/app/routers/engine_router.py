@@ -19,6 +19,9 @@ router = APIRouter(prefix="/engine", tags=["engine"])
 
 _running_instances: dict[str, dict] = {}
 _backpressure_state: dict[str, dict] = {}
+_paused_nodes: dict[str, set] = {}
+_node_logs: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
+_node_samples: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
 
 
 class StreamingEngine:
@@ -45,6 +48,11 @@ class StreamingEngine:
         node = self.nodes[node_id]
         q = self.queues.get(node_id, asyncio.Queue(maxsize=10000))
         while self.running:
+            paused = node_id in _paused_nodes.get(self.dag_id, set())
+            if paused:
+                await asyncio.sleep(0.5)
+                continue
+
             try:
                 data = await asyncio.wait_for(q.get(), timeout=1.0)
             except asyncio.TimeoutError:
@@ -60,8 +68,16 @@ class StreamingEngine:
 
             try:
                 result = await self._execute_node(node, data)
-            except Exception:
+                self._add_log(node_id, "INFO", f"Processed data record successfully")
+            except Exception as e:
                 result = {"_error": True, "_original": data}
+                self._add_log(node_id, "ERROR", str(e))
+
+            if result:
+                samples = _node_samples[self.dag_id][node_id]
+                samples.append(result)
+                if len(samples) > 10:
+                    _node_samples[self.dag_id][node_id] = samples[-10:]
 
             for target_id in self.adj[node_id]:
                 if result:
@@ -69,11 +85,21 @@ class StreamingEngine:
                     try:
                         target_q.put_nowait(result)
                     except asyncio.QueueFull:
-                        pass
+                        self._add_log(node_id, "ERROR", f"Queue full for target {target_id}")
 
             if time.time() - self.last_checkpoint >= settings.CHECKPOINT_INTERVAL:
                 await self._save_checkpoint()
                 self.last_checkpoint = time.time()
+
+    def _add_log(self, node_id: str, level: str, message: str):
+        logs = _node_logs[self.dag_id][node_id]
+        logs.append({
+            "timestamp": datetime.utcnow().isoformat(),
+            "level": level,
+            "message": message,
+        })
+        if len(logs) > 100:
+            _node_logs[self.dag_id][node_id] = logs[-100:]
 
     async def _execute_node(self, node: NodeData, data: dict) -> Optional[dict]:
         ntype = node.type.value
@@ -247,4 +273,36 @@ async def engine_status(dag_id: str):
         "running": True,
         "started_at": instance["started_at"].isoformat(),
         "backpressure": bp is not None and (time.time() - bp.get("timestamp", 0)) < 5,
+        "paused_nodes": list(_paused_nodes.get(dag_id, set())),
     }
+
+
+@router.post("/{dag_id}/nodes/{node_id}/pause")
+async def pause_node(dag_id: str, node_id: str):
+    if dag_id not in _running_instances:
+        raise HTTPException(status_code=400, detail="DAG not running")
+    if dag_id not in _paused_nodes:
+        _paused_nodes[dag_id] = set()
+    _paused_nodes[dag_id].add(node_id)
+    return {"status": "paused", "node_id": node_id}
+
+
+@router.post("/{dag_id}/nodes/{node_id}/resume")
+async def resume_node(dag_id: str, node_id: str):
+    if dag_id in _paused_nodes:
+        _paused_nodes[dag_id].discard(node_id)
+    return {"status": "resumed", "node_id": node_id}
+
+
+@router.get("/{dag_id}/nodes/{node_id}/samples")
+async def get_node_samples(dag_id: str, node_id: str):
+    samples = _node_samples.get(dag_id, {}).get(node_id, [])
+    return {"node_id": node_id, "samples": samples[-10:]}
+
+
+@router.get("/{dag_id}/nodes/{node_id}/logs")
+async def get_node_logs(dag_id: str, node_id: str, level: Optional[str] = None):
+    logs = _node_logs.get(dag_id, {}).get(node_id, [])
+    if level:
+        logs = [l for l in logs if l.get("level") == level]
+    return {"node_id": node_id, "logs": logs[-100:]}

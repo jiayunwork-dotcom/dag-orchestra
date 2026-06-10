@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
   ReactFlow,
@@ -21,6 +21,9 @@ import {
   NodeProps,
   Handle,
   Position,
+  EdgeProps,
+  getBezierPath,
+  BaseEdge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { dagApi, engineApi, alertApi, commentApi } from '@/lib/api';
@@ -28,7 +31,7 @@ import { useDAGStore } from '@/lib/store';
 import {
   NodeData, EdgeData, NodeType, NODE_CATEGORIES, getNodeCategory,
   getNodeLabel, ValidationResult, VersionInfo, Comment, AlertRule,
-  AlertHistoryItem, UserInfo,
+  AlertHistoryItem, UserInfo, LogEntry,
 } from '@/types';
 import { v4 as uuidv4 } from 'uuid';
 import toast, { Toaster } from 'react-hot-toast';
@@ -39,23 +42,58 @@ import VersionPanel from '@/components/VersionPanel';
 import AlertPanel from '@/components/AlertPanel';
 import CommentPanel from '@/components/CommentPanel';
 
+function getLatencyColor(latencyMs: number): string {
+  if (latencyMs < 100) return '#22c55e';
+  if (latencyMs <= 500) return '#eab308';
+  return '#ef4444';
+}
+
 function CustomNode({ data, id }: NodeProps) {
   const d = data as { label: string; nodeType: string; icon: string; isConfigured: boolean; config: any };
   const store = useDAGStore();
   const metrics = store.metrics[id];
+  const isPaused = store.pausedNodes.includes(id);
   const category = getNodeCategory(d.nodeType as NodeType);
   const categoryColors: Record<string, string> = {
     source: '#3b82f6', transform: '#a855f7', aggregate: '#f59e0b',
     window: '#06b6d4', join: '#f97316', sink: '#22c55e',
   };
-  const borderColor = categoryColors[category] || '#475569';
-  const healthClass = metrics?.health === 'green' ? 'health-green' : metrics?.health === 'yellow' ? 'health-yellow' : metrics?.health === 'red' ? 'health-red' : '';
+  const baseBorderColor = categoryColors[category] || '#475569';
+  const runningBorderColor = metrics ? getLatencyColor(metrics.latency_ms) : baseBorderColor;
+  const borderColor = metrics ? runningBorderColor : baseBorderColor;
+  const [displayThroughput, setDisplayThroughput] = useState<number | null>(null);
+  const throughputRef = useRef(metrics?.throughput ?? null);
+
+  useEffect(() => {
+    if (metrics) {
+      throughputRef.current = metrics.throughput;
+    }
+  }, [metrics?.throughput]);
+
+  useEffect(() => {
+    const update = () => {
+      if (throughputRef.current !== null) {
+        setDisplayThroughput(Math.round(throughputRef.current));
+      }
+    };
+    update();
+    const iv = setInterval(update, 5000);
+    return () => clearInterval(iv);
+  }, [metrics]);
 
   return (
     <div
-      className={`px-4 py-3 rounded-lg bg-[#1e293b] border-2 min-w-[180px] shadow-lg ${healthClass}`}
-      style={{ borderColor }}
+      className={`px-4 py-3 rounded-lg bg-[#1e293b] border-2 min-w-[180px] shadow-lg node-status-transition ${isPaused ? 'node-paused' : ''}`}
+      style={{ borderColor, transition: 'border-color 0.8s ease, background-color 0.8s ease' }}
       onDoubleClick={() => store.setConfigNodeId(id)}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        const event = new CustomEvent('node-context-menu', {
+          detail: { nodeId: id, x: e.clientX, y: e.clientY },
+        });
+        window.dispatchEvent(event);
+      }}
+      onClick={() => store.setDetailNodeId(id)}
     >
       {category !== 'sink' && (
         <Handle type="source" position={Position.Right} style={{ background: borderColor }} />
@@ -75,6 +113,19 @@ function CustomNode({ data, id }: NodeProps) {
           <Handle type="target" position={Position.Left} id="input2" style={{ top: '70%', background: borderColor }} />
         </>
       )}
+
+      <div className="relative">
+        {metrics && displayThroughput !== null && (
+          <div className="absolute -top-2 -right-2 bg-[#0f172a] border border-slate-500 rounded-full px-1.5 py-0.5 text-[10px] font-bold text-cyan-400 z-10 whitespace-nowrap">
+            {displayThroughput}条/s
+          </div>
+        )}
+        {isPaused && (
+          <div className="absolute -top-2 -left-2 bg-yellow-600 rounded-full w-5 h-5 flex items-center justify-center z-10 text-xs text-white font-bold">
+            ⏸
+          </div>
+        )}
+      </div>
 
       <div className="flex items-center gap-2">
         <span className="text-lg">{d.icon}</span>
@@ -107,7 +158,52 @@ function CustomNode({ data, id }: NodeProps) {
   );
 }
 
+function FlowEdge({
+  id,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  sourcePosition,
+  targetPosition,
+  source,
+  target,
+  markerEnd,
+  style,
+}: EdgeProps) {
+  const store = useDAGStore();
+  const throughput = store.edgeThroughput[id] || 0;
+  const [edgePath] = getBezierPath({
+    sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition,
+  });
+
+  const particleCount = Math.min(Math.max(Math.floor(throughput / 200), 1), 8);
+  const animDuration = Math.max(4 - throughput / 1000, 0.5);
+
+  return (
+    <g>
+      <BaseEdge path={edgePath} markerEnd={markerEnd} style={style} />
+      {throughput > 0 && Array.from({ length: particleCount }).map((_, i) => (
+        <circle
+          key={`${id}-p-${i}`}
+          r={3}
+          fill="#38bdf8"
+          opacity={0.8}
+        >
+          <animateMotion
+            dur={`${animDuration}s`}
+            repeatCount="indefinite"
+            begin={`${(i * animDuration) / particleCount}s`}
+            path={edgePath}
+          />
+        </circle>
+      ))}
+    </g>
+  );
+}
+
 const nodeTypes = { custom: CustomNode };
+const edgeTypes = { flow: FlowEdge };
 
 export default function EditorPage() {
   const params = useParams();
@@ -127,6 +223,7 @@ export default function EditorPage() {
   const wsRef = useRef<WebSocket | null>(null);
   const collabWsRef = useRef<WebSocket | null>(null);
   const [clipboard, setClipboard] = useState<{ nodes: NodeData[]; edges: EdgeData[] } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null);
 
   useEffect(() => {
     loadDAG();
@@ -137,6 +234,21 @@ export default function EditorPage() {
       collabWsRef.current?.close();
     };
   }, [dagId]);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      setContextMenu({ nodeId: detail.nodeId, x: detail.x, y: detail.y });
+    };
+    window.addEventListener('node-context-menu', handler);
+    return () => window.removeEventListener('node-context-menu', handler);
+  }, []);
+
+  useEffect(() => {
+    const handler = () => setContextMenu(null);
+    window.addEventListener('click', handler);
+    return () => window.removeEventListener('click', handler);
+  }, []);
 
   const loadDAG = async () => {
     try {
@@ -168,6 +280,7 @@ export default function EditorPage() {
     }));
     const rfE: Edge[] = edges.map(e => ({
       id: e.id,
+      type: 'flow',
       source: e.source_id,
       target: e.target_id,
       sourceHandle: e.source_port,
@@ -208,10 +321,22 @@ export default function EditorPage() {
     const ws = new WebSocket(`${wsUrl}/monitoring/${dagId}`);
     ws.onmessage = (e) => {
       try {
-        const metrics = JSON.parse(e.data);
-        const m: Record<string, any> = {};
-        metrics.forEach((item: any) => { m[item.node_id] = item; });
-        store.setMetrics(m);
+        const payload = JSON.parse(e.data);
+        if (Array.isArray(payload)) {
+          const m: Record<string, any> = {};
+          payload.forEach((item: any) => { m[item.node_id] = item; });
+          store.setMetrics(m);
+        } else {
+          const m: Record<string, any> = {};
+          (payload.metrics || []).forEach((item: any) => { m[item.node_id] = item; });
+          store.setMetrics(m);
+          if (payload.paused_nodes) {
+            store.setPausedNodes(payload.paused_nodes);
+          }
+          if (payload.edge_throughput) {
+            store.setEdgeThroughput(payload.edge_throughput);
+          }
+        }
       } catch {}
     };
     wsRef.current = ws;
@@ -319,10 +444,31 @@ export default function EditorPage() {
     }
   };
 
+  const handlePauseNode = async (nodeId: string) => {
+    try {
+      await engineApi.pauseNode(dagId, nodeId);
+      store.setPausedNodes([...store.pausedNodes, nodeId]);
+      toast.success('节点已暂停');
+    } catch {
+      toast.error('暂停失败');
+    }
+  };
+
+  const handleResumeNode = async (nodeId: string) => {
+    try {
+      await engineApi.resumeNode(dagId, nodeId);
+      store.setPausedNodes(store.pausedNodes.filter(n => n !== nodeId));
+      toast.success('节点已恢复');
+    } catch {
+      toast.error('恢复失败');
+    }
+  };
+
   const onConnect = useCallback((connection: Connection) => {
     if (!connection.source || !connection.target) return;
     const edge: Edge = {
       id: uuidv4(),
+      type: 'flow',
       source: connection.source,
       target: connection.target,
       sourceHandle: connection.sourceHandle,
@@ -405,6 +551,8 @@ export default function EditorPage() {
     return () => window.removeEventListener('keydown', handler);
   }, [clipboard, store.nodes, store.edges]);
 
+  const isRunning = dagStatus === 'running' || dagStatus === 'grayscale';
+
   return (
     <div className="h-screen flex flex-col bg-[#0f172a]">
       <Toaster position="top-right" />
@@ -479,6 +627,7 @@ export default function EditorPage() {
             onNodeDragStop={onNodeDragStop}
             onEdgesDelete={onEdgesDelete}
             nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
             fitView
             deleteKeyCode="Delete"
             multiSelectionKeyCode="Shift"
@@ -515,6 +664,30 @@ export default function EditorPage() {
           ))}
         </div>
 
+        {contextMenu && isRunning && (
+          <div
+            className="fixed z-[100] bg-[#1e293b] border border-slate-600 rounded shadow-xl py-1 min-w-[140px]"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {store.pausedNodes.includes(contextMenu.nodeId) ? (
+              <button
+                onClick={() => { handleResumeNode(contextMenu.nodeId); setContextMenu(null); }}
+                className="w-full px-3 py-2 text-sm text-left text-slate-200 hover:bg-slate-700"
+              >
+                ▶ 恢复处理
+              </button>
+            ) : (
+              <button
+                onClick={() => { handlePauseNode(contextMenu.nodeId); setContextMenu(null); }}
+                className="w-full px-3 py-2 text-sm text-left text-slate-200 hover:bg-slate-700"
+              >
+                ⏸ 暂停处理
+              </button>
+            )}
+          </div>
+        )}
+
         {store.configNodeId && (
           <ConfigPanel
             nodeId={store.configNodeId}
@@ -530,12 +703,12 @@ export default function EditorPage() {
         )}
 
         {store.detailNodeId && (
-          <div className="w-80 bg-[#1e293b] border-l border-slate-700 p-4 overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
+          <div className="w-96 bg-[#1e293b] border-l border-slate-700 overflow-y-auto flex-shrink-0">
+            <div className="flex items-center justify-between p-4 border-b border-slate-700">
               <h3 className="font-semibold">节点详情</h3>
               <button onClick={() => store.setDetailNodeId(null)} className="text-slate-400 hover:text-slate-200">✕</button>
             </div>
-            <NodeDetailPanel nodeId={store.detailNodeId} dagId={dagId} />
+            <NodeDetailPanel nodeId={store.detailNodeId} dagId={dagId} isRunning={isRunning} />
           </div>
         )}
       </div>
@@ -550,9 +723,14 @@ export default function EditorPage() {
   );
 }
 
-function NodeDetailPanel({ nodeId, dagId }: { nodeId: string; dagId: string }) {
+function NodeDetailPanel({ nodeId, dagId, isRunning }: { nodeId: string; dagId: string; isRunning: boolean }) {
   const store = useDAGStore();
   const [timeseries, setTimeseries] = useState<any>(null);
+  const [activeTab, setActiveTab] = useState<'metrics' | 'data' | 'logs'>('metrics');
+  const [samples, setSamples] = useState<Record<string, any>[]>([]);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [logFilter, setLogFilter] = useState<string>('');
+  const logsEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -566,42 +744,185 @@ function NodeDetailPanel({ nodeId, dagId }: { nodeId: string; dagId: string }) {
     return () => clearInterval(iv);
   }, [nodeId, dagId]);
 
+  useEffect(() => {
+    if (!isRunning || activeTab !== 'data') return;
+    const load = async () => {
+      try {
+        const res = await engineApi.getNodeSamples(dagId, nodeId);
+        setSamples(res.data.samples || []);
+      } catch {}
+    };
+    load();
+    const iv = setInterval(load, 5000);
+    return () => clearInterval(iv);
+  }, [nodeId, dagId, activeTab, isRunning]);
+
+  useEffect(() => {
+    if (!isRunning || activeTab !== 'logs') return;
+    const load = async () => {
+      try {
+        const res = await engineApi.getNodeLogs(dagId, nodeId, logFilter || undefined);
+        setLogs(res.data.logs || []);
+      } catch {}
+    };
+    load();
+    const iv = setInterval(load, 3000);
+    return () => clearInterval(iv);
+  }, [nodeId, dagId, activeTab, isRunning, logFilter]);
+
+  useEffect(() => {
+    logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [logs]);
+
   const metrics = store.metrics[nodeId];
 
   return (
-    <div className="space-y-4">
-      {metrics && (
-        <div className="grid grid-cols-2 gap-2">
-          <div className="bg-[#0f172a] rounded p-2">
-            <div className="text-xs text-slate-400">吞吐量</div>
-            <div className="text-lg font-bold text-blue-400">{metrics.throughput.toFixed(0)}/s</div>
+    <div>
+      <div className="flex border-b border-slate-700">
+        {(['metrics', 'data', 'logs'] as const).map(tab => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            className={`flex-1 py-2 text-xs font-medium ${
+              activeTab === tab ? 'text-blue-400 border-b-2 border-blue-400' : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            {tab === 'metrics' ? '指标' : tab === 'data' ? '数据采样' : '日志'}
+          </button>
+        ))}
+      </div>
+
+      <div className="p-4">
+        {activeTab === 'metrics' && (
+          <div className="space-y-4">
+            {metrics && (
+              <div className="grid grid-cols-2 gap-2">
+                <div className="bg-[#0f172a] rounded p-2">
+                  <div className="text-xs text-slate-400">吞吐量</div>
+                  <div className="text-lg font-bold text-blue-400">{metrics.throughput.toFixed(0)}/s</div>
+                </div>
+                <div className="bg-[#0f172a] rounded p-2">
+                  <div className="text-xs text-slate-400">延迟</div>
+                  <div className="text-lg font-bold text-cyan-400">{metrics.latency_ms.toFixed(1)}ms</div>
+                </div>
+                <div className="bg-[#0f172a] rounded p-2">
+                  <div className="text-xs text-slate-400">积压</div>
+                  <div className="text-lg font-bold text-yellow-400">{metrics.backlog}</div>
+                </div>
+                <div className="bg-[#0f172a] rounded p-2">
+                  <div className="text-xs text-slate-400">错误率</div>
+                  <div className="text-lg font-bold text-red-400">{(metrics.error_rate * 100).toFixed(2)}%</div>
+                </div>
+              </div>
+            )}
+            {timeseries && (
+              <div className="bg-[#0f172a] rounded p-3">
+                <h4 className="text-sm font-medium mb-2">延迟曲线 (最近1小时)</h4>
+                <div className="h-32 flex items-end gap-px">
+                  {timeseries.latency.slice(-60).map((v: number, i: number) => (
+                    <div
+                      key={i}
+                      className="flex-1 bg-blue-500 rounded-t"
+                      style={{ height: `${Math.min((v / 1000) * 100, 100)}%` }}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
-          <div className="bg-[#0f172a] rounded p-2">
-            <div className="text-xs text-slate-400">延迟</div>
-            <div className="text-lg font-bold text-cyan-400">{metrics.latency_ms.toFixed(1)}ms</div>
+        )}
+
+        {activeTab === 'data' && (
+          <div className="space-y-2">
+            {!isRunning ? (
+              <div className="text-sm text-slate-500 text-center py-4">DAG未运行时无数据采样</div>
+            ) : samples.length === 0 ? (
+              <div className="text-sm text-slate-500 text-center py-4">暂无数据采样</div>
+            ) : (
+              samples.map((sample, idx) => (
+                <JsonCollapsible key={idx} data={sample} label={`#${idx + 1}`} />
+              ))
+            )}
           </div>
-          <div className="bg-[#0f172a] rounded p-2">
-            <div className="text-xs text-slate-400">积压</div>
-            <div className="text-lg font-bold text-yellow-400">{metrics.backlog}</div>
+        )}
+
+        {activeTab === 'logs' && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 mb-2">
+              <label className="flex items-center gap-1 text-xs text-slate-400 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={logFilter === 'ERROR'}
+                  onChange={(e) => setLogFilter(e.target.checked ? 'ERROR' : '')}
+                  className="rounded"
+                />
+                仅显示ERROR
+              </label>
+            </div>
+            {!isRunning ? (
+              <div className="text-sm text-slate-500 text-center py-4">DAG未运行时无日志</div>
+            ) : logs.length === 0 ? (
+              <div className="text-sm text-slate-500 text-center py-4">暂无日志</div>
+            ) : (
+              <div className="max-h-[500px] overflow-y-auto space-y-1">
+                {logs.map((log, idx) => (
+                  <div key={idx} className="bg-[#0f172a] rounded p-2 text-xs font-mono">
+                    <div className="flex items-center gap-2">
+                      <span className="text-slate-500">{log.timestamp.split('T')[1]?.split('.')[0]}</span>
+                      <span className={`px-1 rounded ${
+                        log.level === 'ERROR' ? 'bg-red-900 text-red-300' :
+                        log.level === 'WARN' ? 'bg-yellow-900 text-yellow-300' :
+                        'bg-slate-700 text-slate-300'
+                      }`}>
+                        {log.level}
+                      </span>
+                      <span className="text-slate-300 break-all">{log.message}</span>
+                    </div>
+                  </div>
+                ))}
+                <div ref={logsEndRef} />
+              </div>
+            )}
           </div>
-          <div className="bg-[#0f172a] rounded p-2">
-            <div className="text-xs text-slate-400">错误率</div>
-            <div className="text-lg font-bold text-red-400">{(metrics.error_rate * 100).toFixed(2)}%</div>
-          </div>
-        </div>
-      )}
-      {timeseries && (
-        <div className="bg-[#0f172a] rounded p-3">
-          <h4 className="text-sm font-medium mb-2">延迟曲线 (最近1小时)</h4>
-          <div className="h-32 flex items-end gap-px">
-            {timeseries.latency.slice(-60).map((v: number, i: number) => (
-              <div
-                key={i}
-                className="flex-1 bg-blue-500 rounded-t"
-                style={{ height: `${Math.min((v / 1000) * 100, 100)}%` }}
-              />
-            ))}
-          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function JsonCollapsible({ data, label, depth = 0 }: { data: any; label: string; depth?: number }) {
+  const [collapsed, setCollapsed] = useState(depth > 1);
+  const isObject = data !== null && typeof data === 'object' && !Array.isArray(data);
+  const isArray = Array.isArray(data);
+
+  if (!isObject && !isArray) {
+    return (
+      <div className="flex items-center gap-1 text-xs font-mono" style={{ paddingLeft: depth * 12 }}>
+        <span className="text-slate-400">{label}:</span>
+        <span className={typeof data === 'string' ? 'text-green-400' : typeof data === 'number' ? 'text-cyan-400' : typeof data === 'boolean' ? 'text-yellow-400' : 'text-slate-300'}>
+          {JSON.stringify(data)}
+        </span>
+      </div>
+    );
+  }
+
+  const entries = isArray ? data.map((v: any, i: number) => [String(i), v]) : Object.entries(data);
+
+  return (
+    <div style={{ paddingLeft: depth > 0 ? 12 : 0 }}>
+      <button
+        onClick={() => setCollapsed(!collapsed)}
+        className="flex items-center gap-1 text-xs font-mono text-slate-300 hover:text-white w-full text-left"
+      >
+        <span className="text-slate-500">{collapsed ? '▶' : '▼'}</span>
+        <span className="text-slate-400">{label}</span>
+        <span className="text-slate-600">{isArray ? `(${data.length})` : `{${Object.keys(data).length}}`}</span>
+      </button>
+      {!collapsed && (
+        <div>
+          {entries.map(([key, value]) => (
+            <JsonCollapsible key={key} data={value} label={key} depth={depth + 1} />
+          ))}
         </div>
       )}
     </div>

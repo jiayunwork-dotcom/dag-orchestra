@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { NodeData, EdgeData, NodeMetrics, CollabCursor, UserInfo, Comment, AlertHistoryItem } from '@/types';
+import { NodeData, EdgeData, NodeMetrics, CollabCursor, UserInfo, Comment, AlertHistoryItem, LogEntry, EdgeThroughputMap } from '@/types';
 
 interface HistoryEntry {
   nodes: NodeData[];
@@ -22,6 +22,9 @@ interface DAGStore {
   detailNodeId: string | null;
   isReadOnly: boolean;
   viewingVersion: number | null;
+  pausedNodes: string[];
+  nodeLogs: Record<string, LogEntry[]>;
+  edgeThroughput: EdgeThroughputMap;
 
   setNodes: (nodes: NodeData[]) => void;
   setEdges: (edges: EdgeData[]) => void;
@@ -42,6 +45,9 @@ interface DAGStore {
   setAlertHistory: (history: AlertHistoryItem[]) => void;
   setIsReadOnly: (readOnly: boolean) => void;
   setViewingVersion: (version: number | null) => void;
+  setPausedNodes: (nodes: string[]) => void;
+  setNodeLogs: (nodeId: string, logs: LogEntry[]) => void;
+  setEdgeThroughput: (throughput: EdgeThroughputMap) => void;
   pushHistory: () => void;
   undo: () => void;
   redo: () => void;
@@ -65,6 +71,9 @@ export const useDAGStore = create<DAGStore>((set, get) => ({
   detailNodeId: null,
   isReadOnly: false,
   viewingVersion: null,
+  pausedNodes: [],
+  nodeLogs: {},
+  edgeThroughput: {},
 
   setNodes: (nodes) => set({ nodes }),
   setEdges: (edges) => set({ edges }),
@@ -121,6 +130,9 @@ export const useDAGStore = create<DAGStore>((set, get) => ({
   setAlertHistory: (history) => set({ alertHistory: history }),
   setIsReadOnly: (readOnly) => set({ isReadOnly: readOnly }),
   setViewingVersion: (version) => set({ viewingVersion: version }),
+  setPausedNodes: (nodes) => set({ pausedNodes: nodes }),
+  setNodeLogs: (nodeId, logs) => set((state) => ({ nodeLogs: { ...state.nodeLogs, [nodeId]: logs } })),
+  setEdgeThroughput: (throughput) => set({ edgeThroughput: throughput }),
 
   pushHistory: () => {
     const { nodes, edges, history, historyIndex } = get();
@@ -154,5 +166,6 @@ export const useDAGStore = create<DAGStore>((set, get) => ({
     nodes: [], edges: [], selectedNodes: [], selectedEdge: null,
     history: [], historyIndex: -1, metrics: {}, collabCursors: {},
     configNodeId: null, detailNodeId: null, isReadOnly: false, viewingVersion: null,
+    pausedNodes: [], nodeLogs: {}, edgeThroughput: {},
   }),
 }));

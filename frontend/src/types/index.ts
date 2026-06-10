@@ -200,6 +200,26 @@ export interface CollabCursor {
   selected_nodes: string[];
 }
 
+export interface LogEntry {
+  timestamp: string;
+  level: string;
+  message: string;
+}
+
+export interface DataSample {
+  node_id: string;
+  samples: Record<string, any>[];
+}
+
+export interface NodeLogResponse {
+  node_id: string;
+  logs: LogEntry[];
+}
+
+export interface EdgeThroughputMap {
+  [edgeId: string]: number;
+}
+
 export const NODE_CATEGORIES = {
   source: {
     label: '数据源',

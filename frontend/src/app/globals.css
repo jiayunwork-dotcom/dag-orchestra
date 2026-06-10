@@ -59,6 +59,21 @@ body {
 .health-yellow { background-color: #eab30820; border: 1px solid #eab308; }
 .health-red { background-color: #ef444420; border: 1px solid #ef4444; }
 
+.node-status-transition {
+  transition: border-color 0.8s ease, background-color 0.8s ease, box-shadow 0.8s ease;
+}
+
+.node-paused {
+  background-color: #1e293b90 !important;
+  box-shadow: 0 0 12px 2px #eab30860;
+  animation: pause-pulse 2s ease-in-out infinite;
+}
+
+@keyframes pause-pulse {
+  0%, 100% { box-shadow: 0 0 12px 2px #eab30860; }
+  50% { box-shadow: 0 0 6px 1px #eab30830; }
+}
+
 .schema-error .react-flow__edge-path {
   stroke: #ef4444 !important;
   stroke-dasharray: 5 5;

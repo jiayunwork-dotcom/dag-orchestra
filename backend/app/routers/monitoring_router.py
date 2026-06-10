@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.models import DAG, DAGStatus, Checkpoint, AlertRule, AlertHistory, AlertSeverity, AlertStatus
-from app.schemas import NodeMetrics, DAGMetrics, MetricsTimeSeries
+from app.schemas import NodeMetrics, DAGMetrics, MetricsTimeSeries, DataSample, LogEntry, NodeLogResponse
 
 router = APIRouter(prefix="/monitoring", tags=["monitoring"])
 ws_router = APIRouter(tags=["monitoring-ws"])
@@ -159,11 +159,28 @@ async def metrics_websocket(websocket: WebSocket, dag_id: str):
         )
         latest = ver.scalar_one_or_none()
         node_ids = [n["id"] for n in (latest.nodes or [])] if latest else []
+        edges = latest.edges or [] if latest else []
 
         while True:
             await _simulate_node_metrics(dag_id, node_ids)
             metrics = list(_metrics_store.get(dag_id, {}).values())
-            await websocket.send_json([m.model_dump() for m in metrics])
+
+            from app.routers.engine_router import _paused_nodes
+            paused = list(_paused_nodes.get(dag_id, set()))
+
+            edge_throughput = {}
+            for e in edges:
+                src_id = e.get("source_id") if isinstance(e, dict) else e.source_id
+                tgt_id = e.get("target_id") if isinstance(e, dict) else e.target_id
+                src_metrics = _metrics_store.get(dag_id, {}).get(src_id)
+                if src_metrics:
+                    edge_throughput[e.get("id") if isinstance(e, dict) else e.id] = src_metrics.throughput
+
+            await websocket.send_json({
+                "metrics": [m.model_dump() for m in metrics],
+                "paused_nodes": paused,
+                "edge_throughput": edge_throughput,
+            })
             await asyncio.sleep(5)
     except WebSocketDisconnect:
         pass
