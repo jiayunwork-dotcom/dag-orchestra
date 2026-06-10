@@ -203,9 +203,12 @@ async def get_dag(dag_id: str, db: AsyncSession = Depends(get_db)):
 
     nodes_data = []
     edges_data = []
-    if latest:
+    if latest and latest.nodes:
         nodes_data = [NodeData(**n) for n in (latest.nodes or [])]
         edges_data = [EdgeData(**e) for e in (latest.edges or [])]
+    elif dag.nodes:
+        nodes_data = [NodeData(**n) for n in (dag.nodes or [])]
+        edges_data = [EdgeData(**e) for e in (dag.edges or [])]
 
     return DAGDetail(
         id=dag.id,
@@ -247,11 +250,6 @@ async def update_dag(
     dag.updated_at = datetime.utcnow()
 
     if body.nodes is not None or body.edges is not None:
-        ver_result = await db.execute(
-            select(func.max(DAGVersion.version_number)).where(DAGVersion.dag_id == dag_id)
-        )
-        max_ver = ver_result.scalar() or 0
-
         current_ver = await db.execute(
             select(DAGVersion).where(DAGVersion.dag_id == dag_id).order_by(DAGVersion.version_number.desc()).limit(1)
         )
@@ -259,8 +257,14 @@ async def update_dag(
         cur_nodes = current.nodes if current else []
         cur_edges = current.edges if current else []
 
-        new_nodes = [n.model_dump() for n in (body.nodes or [NodeData(**n) for n in cur_nodes])]
-        new_edges = [e.model_dump() for e in (body.edges or [EdgeData(**e) for e in cur_edges])]
+        new_nodes_list = body.nodes if body.nodes is not None else [NodeData(**n) for n in cur_nodes]
+        new_edges_list = body.edges if body.edges is not None else [EdgeData(**e) for e in cur_edges]
+
+        new_nodes = [n.model_dump() for n in new_nodes_list]
+        new_edges = [e.model_dump() for e in new_edges_list]
+
+        dag.nodes = new_nodes
+        dag.edges = new_edges
 
         if dag.status == DAGStatus.DRAFT and body.nodes is not None and body.edges is not None:
             validation = _validate_dag(body.nodes, body.edges)
@@ -274,6 +278,11 @@ async def update_dag(
                     "orphan_nodes": validation.orphan_nodes,
                     "unconfigured_nodes": validation.unconfigured_nodes,
                 }})
+
+        ver_result = await db.execute(
+            select(func.max(DAGVersion.version_number)).where(DAGVersion.dag_id == dag_id)
+        )
+        max_ver = ver_result.scalar() or 0
 
         version = DAGVersion(
             id=str(uuid.uuid4()),
@@ -302,6 +311,15 @@ async def update_dag(
     )
     latest = latest_ver.scalar_one_or_none()
 
+    nodes_to_return = []
+    edges_to_return = []
+    if latest and latest.nodes:
+        nodes_to_return = [NodeData(**n) for n in (latest.nodes or [])]
+        edges_to_return = [EdgeData(**e) for e in (latest.edges or [])]
+    elif dag.nodes:
+        nodes_to_return = [NodeData(**n) for n in (dag.nodes or [])]
+        edges_to_return = [EdgeData(**e) for e in (dag.edges or [])]
+
     return DAGDetail(
         id=dag.id,
         name=dag.name,
@@ -311,8 +329,8 @@ async def update_dag(
         owner_id=dag.owner_id,
         created_at=dag.created_at,
         updated_at=dag.updated_at,
-        nodes=[NodeData(**n) for n in (latest.nodes or [])] if latest else [],
-        edges=[EdgeData(**e) for e in (latest.edges or [])] if latest else [],
+        nodes=nodes_to_return,
+        edges=edges_to_return,
     )
 
 

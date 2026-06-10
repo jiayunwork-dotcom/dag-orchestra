@@ -55,6 +55,8 @@ class DAG(Base):
     description = Column(Text, default="")
     status = Column(Enum(DAGStatus), default=DAGStatus.DRAFT)
     grayscale_ratio = Column(Integer, default=0)
+    nodes = Column(JSON, default=list)
+    edges = Column(JSON, default=list)
     owner_id = Column(String, ForeignKey("users.id"))
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

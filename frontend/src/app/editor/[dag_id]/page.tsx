@@ -376,13 +376,22 @@ export default function EditorPage() {
   const handleSave = async () => {
     const { nodes, edges } = syncFromReactFlow();
     try {
-      await dagApi.update(dagId, { name: dagName, nodes, edges });
+      const res = await dagApi.update(dagId, { name: dagName, nodes, edges });
+      setDagName(res.data.name);
+      setDagStatus(res.data.status);
+      setGrayscaleRatio(res.data.grayscale_ratio);
+      if (res.data.nodes && res.data.edges) {
+        store.loadDAG(res.data.nodes, res.data.edges);
+        syncToReactFlow(res.data.nodes, res.data.edges);
+      }
       toast.success('保存成功');
     } catch (err: any) {
       const detail = err.response?.data?.detail;
       if (detail?.validation) {
         setValidation(detail.validation);
         toast.error('DAG验证未通过');
+      } else if (detail) {
+        toast.error(typeof detail === 'string' ? detail : JSON.stringify(detail));
       } else {
         toast.error('保存失败');
       }

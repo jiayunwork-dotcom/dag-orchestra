@@ -27,7 +27,26 @@ async def _simulate_node_metrics(dag_id: str, node_ids: list[str]):
     import random
     if dag_id not in _metrics_store:
         _metrics_store[dag_id] = {}
+    from app.routers.engine_router import _paused_nodes
+    paused_set = _paused_nodes.get(dag_id, set())
     for nid in node_ids:
+        if nid in paused_set:
+            existing = _metrics_store.get(dag_id, {}).get(nid)
+            backlog = (existing.backlog if existing else 0) + random.randint(5, 50)
+            _metrics_store[dag_id][nid] = NodeMetrics(
+                node_id=nid, throughput=0, latency_ms=0,
+                backlog=backlog, error_rate=0, health="yellow"
+            )
+            ts = _time_series[dag_id][nid]
+            ts.append({
+                "timestamp": datetime.utcnow().isoformat(),
+                "throughput": 0,
+                "latency": 0,
+                "error_rate": 0,
+            })
+            if len(ts) > 720:
+                ts.pop(0)
+            continue
         throughput = random.uniform(50, 2000)
         latency = random.uniform(10, 800)
         backlog = random.randint(0, 500)

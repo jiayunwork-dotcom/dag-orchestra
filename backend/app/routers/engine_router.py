@@ -68,7 +68,12 @@ class StreamingEngine:
 
             try:
                 result = await self._execute_node(node, data)
-                self._add_log(node_id, "INFO", f"Processed data record successfully")
+                summary_parts = []
+                for key in ["id", "user_id", "category", "amount", "node_id"]:
+                    if isinstance(data, dict) and key in data:
+                        summary_parts.append(f"{key}={data[key]}")
+                summary = ", ".join(summary_parts) if summary_parts else f"keys={list(data.keys()) if isinstance(data, dict) else type(data).__name__}"
+                self._add_log(node_id, "INFO", f"Processed record ({summary})")
             except Exception as e:
                 result = {"_error": True, "_original": data}
                 self._add_log(node_id, "ERROR", str(e))
