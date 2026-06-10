@@ -34,7 +34,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     environment:
-      DATABASE_URL: postgresql://dag:dag_secret_2024@postgres:5432/dag_orchestra
+      DATABASE_URL: postgresql+asyncpg://dag:dag_secret_2024@postgres:5432/dag_orchestra
       REDIS_URL: redis://redis:6379/0
       CORS_ORIGINS: http://localhost:8080
       CHECKPOINT_INTERVAL: 60

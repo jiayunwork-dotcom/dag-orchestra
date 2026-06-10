@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    DATABASE_URL: str = "postgresql://dag:dag_secret_2024@postgres:5432/dag_orchestra"
+    DATABASE_URL: str = "postgresql+asyncpg://dag:dag_secret_2024@postgres:5432/dag_orchestra"
     REDIS_URL: str = "redis://redis:6379/0"
     CORS_ORIGINS: str = "http://localhost:8080"
     SECRET_KEY: str = "dag-orchestra-secret-key-change-in-production"
