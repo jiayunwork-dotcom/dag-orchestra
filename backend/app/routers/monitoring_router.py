@@ -15,6 +15,7 @@ from app.models import DAG, DAGStatus, Checkpoint, AlertRule, AlertHistory, Aler
 from app.schemas import NodeMetrics, DAGMetrics, MetricsTimeSeries
 
 router = APIRouter(prefix="/monitoring", tags=["monitoring"])
+ws_router = APIRouter(tags=["monitoring-ws"])
 
 _metrics_store: dict[str, dict[str, NodeMetrics]] = {}
 _time_series: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
@@ -138,7 +139,7 @@ async def list_checkpoints(dag_id: str, db: AsyncSession = Depends(get_db)):
     return [{"id": c.id, "created_at": c.created_at.isoformat()} for c in cps]
 
 
-@router.websocket("/ws/{dag_id}")
+@ws_router.websocket("/monitoring/{dag_id}")
 async def metrics_websocket(websocket: WebSocket, dag_id: str):
     await websocket.accept()
     db = None

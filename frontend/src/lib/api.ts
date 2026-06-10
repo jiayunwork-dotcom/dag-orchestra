@@ -40,7 +40,7 @@ export const dagApi = {
   create: (data: { name: string; description: string }) => api.post('/dags', data),
   update: (id: string, data: any) => api.put(`/dags/${id}`, data),
   delete: (id: string) => api.delete(`/dags/${id}`),
-  validate: (id: string) => api.post(`/dags/${id}/validate`),
+  validate: (id: string, data?: { nodes: any[]; edges: any[] }) => api.post(`/dags/${id}/validate`, data || {}),
   autoLayout: (id: string) => api.post(`/dags/${id}/auto-layout`),
   publish: (id: string, grayscale_ratio: number = 0) => api.post(`/dags/${id}/publish`, { grayscale_ratio }),
   stop: (id: string) => api.post(`/dags/${id}/stop`),

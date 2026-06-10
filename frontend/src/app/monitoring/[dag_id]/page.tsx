@@ -56,7 +56,7 @@ export default function MonitoringPage() {
 
   const connectWS = () => {
     const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8080/ws';
-    const ws = new WebSocket(`${wsUrl}/monitoring/ws/${dagId}`);
+    const ws = new WebSocket(`${wsUrl}/monitoring/${dagId}`);
     ws.onmessage = (e) => {
       try {
         const data = JSON.parse(e.data);

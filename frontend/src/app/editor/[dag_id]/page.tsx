@@ -205,7 +205,7 @@ export default function EditorPage() {
 
   const connectMetricsWS = () => {
     const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8080/ws';
-    const ws = new WebSocket(`${wsUrl}/monitoring/ws/${dagId}`);
+    const ws = new WebSocket(`${wsUrl}/monitoring/${dagId}`);
     ws.onmessage = (e) => {
       try {
         const metrics = JSON.parse(e.data);
@@ -261,9 +261,12 @@ export default function EditorPage() {
   };
 
   const handleValidate = async () => {
-    syncFromReactFlow();
+    const { nodes, edges } = syncFromReactFlow();
     try {
-      const res = await dagApi.validate(dagId);
+      const res = await dagApi.validate(dagId, {
+        nodes: nodes.map(n => ({ ...n, position: { x: n.position.x, y: n.position.y } })),
+        edges,
+      });
       setValidation(res.data);
       if (res.data.valid) toast.success('验证通过');
       else toast.error('验证未通过');

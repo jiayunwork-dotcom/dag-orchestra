@@ -18,7 +18,7 @@ _room_states: dict[str, dict] = {}
 _conflict_tracker: dict[str, dict] = {}
 
 
-@router.websocket("/ws/collab/{dag_id}")
+@router.websocket("/collab/{dag_id}")
 async def collab_websocket(websocket: WebSocket, dag_id: str):
     await websocket.accept()
     user_id = None

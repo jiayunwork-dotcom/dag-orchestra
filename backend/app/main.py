@@ -11,6 +11,7 @@ from app.routers import (
     alert_router,
     comment_router,
     monitoring_router,
+    monitoring_ws_router,
     engine_router,
     collab_router,
 )
@@ -32,13 +33,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth_router.router, prefix="/api")
-app.include_router(dag_router.router, prefix="/api")
-app.include_router(alert_router.router, prefix="/api")
-app.include_router(comment_router.router, prefix="/api")
-app.include_router(monitoring_router.router, prefix="/api")
-app.include_router(engine_router.router, prefix="/api")
-app.include_router(collab_router.router, prefix="/ws")
+app.include_router(auth_router, prefix="/api")
+app.include_router(dag_router, prefix="/api")
+app.include_router(alert_router, prefix="/api")
+app.include_router(comment_router, prefix="/api")
+app.include_router(monitoring_router, prefix="/api")
+app.include_router(engine_router, prefix="/api")
+app.include_router(collab_router, prefix="/ws")
+app.include_router(monitoring_ws_router, prefix="/ws")
 
 
 @app.get("/api/health")

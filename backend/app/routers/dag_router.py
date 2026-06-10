@@ -2,7 +2,7 @@ import uuid
 from collections import defaultdict
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,6 +13,7 @@ from app.models import DAG, DAGStatus, DAGVersion, DAGPermission, User
 from app.schemas import (
     DAGCreate, DAGUpdate, DAGOut, DAGDetail, NodeData, EdgeData,
     ValidationResult, VersionOut, VersionDiff, GrayscaleUpdate, PublishRequest,
+    Position,
 )
 
 router = APIRouter(prefix="/dags", tags=["dags"])
@@ -251,11 +252,6 @@ async def update_dag(
         )
         max_ver = ver_result.scalar() or 0
 
-        if body.nodes is not None and body.edges is not None:
-            validation = _validate_dag(body.nodes, body.edges)
-            if not validation.valid:
-                raise HTTPException(status_code=400, detail={"validation": validation.model_dump()})
-
         current_ver = await db.execute(
             select(DAGVersion).where(DAGVersion.dag_id == dag_id).order_by(DAGVersion.version_number.desc()).limit(1)
         )
@@ -265,6 +261,19 @@ async def update_dag(
 
         new_nodes = [n.model_dump() for n in (body.nodes or [NodeData(**n) for n in cur_nodes])]
         new_edges = [e.model_dump() for e in (body.edges or [EdgeData(**e) for e in cur_edges])]
+
+        if dag.status == DAGStatus.DRAFT and body.nodes is not None and body.edges is not None:
+            validation = _validate_dag(body.nodes, body.edges)
+            hard_errors = [e for e in validation.errors if not e.startswith("Unconfigured nodes")]
+            if hard_errors:
+                raise HTTPException(status_code=400, detail={"validation": {
+                    "valid": False,
+                    "errors": hard_errors,
+                    "warnings": validation.warnings + [e for e in validation.errors if e.startswith("Unconfigured nodes")],
+                    "cycle_nodes": validation.cycle_nodes,
+                    "orphan_nodes": validation.orphan_nodes,
+                    "unconfigured_nodes": validation.unconfigured_nodes,
+                }})
 
         version = DAGVersion(
             id=str(uuid.uuid4()),
@@ -318,21 +327,35 @@ async def delete_dag(dag_id: str, user: User = Depends(require_role(UserRole.ADM
 
 
 @router.post("/{dag_id}/validate", response_model=ValidationResult)
-async def validate_dag(dag_id: str, db: AsyncSession = Depends(get_db)):
+async def validate_dag(
+    dag_id: str,
+    body: dict | None = None,
+    db: AsyncSession = Depends(get_db),
+):
     result = await db.execute(select(DAG).where(DAG.id == dag_id))
     dag = result.scalar_one_or_none()
     if not dag:
         raise HTTPException(status_code=404, detail="DAG not found")
 
-    ver = await db.execute(
-        select(DAGVersion).where(DAGVersion.dag_id == dag_id).order_by(DAGVersion.version_number.desc()).limit(1)
-    )
-    latest = ver.scalar_one_or_none()
-    if not latest:
-        return ValidationResult(valid=False, errors=["No version found"], warnings=[], cycle_nodes=[], orphan_nodes=[], unconfigured_nodes=[])
+    nodes: list[NodeData] = []
+    edges: list[EdgeData] = []
 
-    nodes = [NodeData(**n) for n in (latest.nodes or [])]
-    edges = [EdgeData(**e) for e in (latest.edges or [])]
+    if body and "nodes" in body and "edges" in body:
+        nodes = [NodeData(**n) for n in (body.get("nodes") or [])]
+        edges = [EdgeData(**e) for e in (body.get("edges") or [])]
+    else:
+        ver = await db.execute(
+            select(DAGVersion).where(DAGVersion.dag_id == dag_id).order_by(DAGVersion.version_number.desc()).limit(1)
+        )
+        latest = ver.scalar_one_or_none()
+        if not latest:
+            return ValidationResult(valid=True, errors=[], warnings=["DAG is empty — no nodes to validate"], cycle_nodes=[], orphan_nodes=[], unconfigured_nodes=[])
+        nodes = [NodeData(**n) for n in (latest.nodes or [])]
+        edges = [EdgeData(**e) for e in (latest.edges or [])]
+
+    if not nodes:
+        return ValidationResult(valid=True, errors=[], warnings=["DAG is empty — no nodes to validate"], cycle_nodes=[], orphan_nodes=[], unconfigured_nodes=[])
+
     return _validate_dag(nodes, edges)
 
 
