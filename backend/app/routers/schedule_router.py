@@ -404,27 +404,18 @@ async def get_execution_detail(execution_id: str, db: AsyncSession = Depends(get
 
 
 @router.get("/executions/{dag_id}/stats", response_model=ExecutionStats)
-async def get_execution_stats(dag_id: str, db: AsyncSession = Depends(get_db)):
+async def get_execution_stats(dag_id: str):
     seven_days_ago = datetime.utcnow() - timedelta(days=7)
     today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
 
-    result = await db.execute(
-        select(ExecutionRecord).where(
-            ExecutionRecord.dag_id == dag_id,
-            ExecutionRecord.triggered_at >= seven_days_ago,
-        )
+    empty_stats = ExecutionStats(
+        daily_stats=[],
+        total_executions=0,
+        success_rate=0.0,
+        avg_duration_seconds=0.0,
+        max_duration_seconds=0.0,
+        has_data=False,
     )
-    records = result.scalars().all()
-
-    if not records:
-        return ExecutionStats(
-            daily_stats=[],
-            total_executions=0,
-            success_rate=0.0,
-            avg_duration_seconds=0.0,
-            max_duration_seconds=0.0,
-            has_data=False,
-        )
 
     daily_map: dict[str, DailyStats] = {}
     for i in range(7):
@@ -436,22 +427,38 @@ async def get_execution_stats(dag_id: str, db: AsyncSession = Depends(get_db)):
     total_count = 0
     durations = []
 
-    for rec in records:
-        date_str = rec.triggered_at.strftime("%Y-%m-%d")
+    async with async_session() as db:
+        try:
+            result = await db.execute(text(
+                "SELECT status::text as status, triggered_at, finished_at "
+                "FROM execution_records "
+                "WHERE dag_id = :dag_id AND triggered_at >= :since"
+            ), {"dag_id": dag_id, "since": seven_days_ago})
+            rows = result.fetchall()
+        except Exception as e:
+            print(f"execution stats query error: {e}")
+            return empty_stats
+
+    if not rows:
+        return empty_stats
+
+    for row in rows:
+        date_str = row.triggered_at.strftime("%Y-%m-%d")
         if date_str not in daily_map:
             daily_map[date_str] = DailyStats(date=date_str)
         ds = daily_map[date_str]
-        if rec.status == ExecutionStatus.SUCCESS:
+        status = row.status
+        if status == ExecutionStatus.SUCCESS.value:
             ds.success += 1
             total_success += 1
-        elif rec.status == ExecutionStatus.FAILED:
+        elif status == ExecutionStatus.FAILED.value:
             ds.failed += 1
-        elif rec.status == ExecutionStatus.TIMEOUT:
+        elif status == ExecutionStatus.TIMEOUT.value:
             ds.timeout += 1
 
         total_count += 1
-        if rec.finished_at and rec.triggered_at:
-            dur = (rec.finished_at - rec.triggered_at).total_seconds()
+        if row.finished_at and row.triggered_at:
+            dur = (row.finished_at - row.triggered_at).total_seconds()
             durations.append(dur)
 
     sorted_dates = sorted(daily_map.keys())
@@ -488,64 +495,85 @@ async def preview_cron(expression: str = Query(..., description="Cron表达式")
 
 
 @router.get("/overview", response_model=ScheduleOverview)
-async def schedule_overview(db: AsyncSession = Depends(get_db)):
+async def schedule_overview():
     today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     seven_days_ago = datetime.utcnow() - timedelta(days=7)
 
-    today_triggers = await db.execute(
-        select(func.count()).where(ExecutionRecord.triggered_at >= today_start)
-    )
-    today_total = today_triggers.scalar() or 0
-
-    today_success = await db.execute(
-        select(func.count()).where(
-            ExecutionRecord.triggered_at >= today_start,
-            ExecutionRecord.status == ExecutionStatus.SUCCESS,
-        )
-    )
-    success_count = today_success.scalar() or 0
-    today_success_rate = (success_count / today_total * 100) if today_total > 0 else 0.0
-
-    running_count = await db.execute(
-        select(func.count()).where(ExecutionRecord.status == ExecutionStatus.RUNNING)
-    )
-    running = running_count.scalar() or 0
-
+    today_total = 0
+    success_count = 0
+    running = 0
     week_timeout_count = 0
-    try:
-        week_timeout = await db.execute(
-            select(func.count()).where(
-                ExecutionRecord.triggered_at >= seven_days_ago,
-                ExecutionRecord.status == ExecutionStatus.TIMEOUT,
-            )
-        )
-        week_timeout_count = week_timeout.scalar() or 0
-    except Exception as e:
-        print(f"week_timeout query fallback: {e}")
-        try:
-            raw_res = await db.execute(text(
-                "SELECT COUNT(*) FROM execution_records "
-                "WHERE triggered_at >= :since AND status::text = 'timeout'"
-            ), {"since": seven_days_ago})
-            week_timeout_count = raw_res.scalar() or 0
-        except Exception as e2:
-            print(f"week_timeout raw query also failed: {e2}")
-
-    last_failed = await db.execute(
-        select(ExecutionRecord)
-        .where(ExecutionRecord.status == ExecutionStatus.FAILED)
-        .order_by(ExecutionRecord.finished_at.desc())
-        .limit(1)
-    )
-    failed_record = last_failed.scalar_one_or_none()
-
     last_failed_dag_name = None
     last_failed_time = None
-    if failed_record:
-        last_failed_time = failed_record.finished_at
-        dag_result = await db.execute(select(DAG).where(DAG.id == failed_record.dag_id))
-        dag = dag_result.scalar_one_or_none()
-        last_failed_dag_name = dag.name if dag else None
+
+    async with async_session() as db:
+        try:
+            res = await db.execute(
+                select(func.count()).where(ExecutionRecord.triggered_at >= today_start)
+            )
+            today_total = res.scalar() or 0
+        except Exception as e:
+            print(f"overview today_total error: {e}")
+
+    async with async_session() as db:
+        try:
+            res = await db.execute(
+                select(func.count()).where(
+                    ExecutionRecord.triggered_at >= today_start,
+                    ExecutionRecord.status == ExecutionStatus.SUCCESS,
+                )
+            )
+            success_count = res.scalar() or 0
+        except Exception as e:
+            print(f"overview success_count error: {e}")
+
+    today_success_rate = (success_count / today_total * 100) if today_total > 0 else 0.0
+
+    async with async_session() as db:
+        try:
+            res = await db.execute(
+                select(func.count()).where(ExecutionRecord.status == ExecutionStatus.RUNNING)
+            )
+            running = res.scalar() or 0
+        except Exception as e:
+            print(f"overview running error: {e}")
+
+    async with async_session() as db:
+        try:
+            res = await db.execute(
+                select(func.count()).where(
+                    ExecutionRecord.triggered_at >= seven_days_ago,
+                    ExecutionRecord.status == ExecutionStatus.TIMEOUT,
+                )
+            )
+            week_timeout_count = res.scalar() or 0
+        except Exception as e:
+            print(f"overview week_timeout fallback: {e}")
+            try:
+                raw_res = await db.execute(text(
+                    "SELECT COUNT(*) FROM execution_records "
+                    "WHERE triggered_at >= :since AND status::text = 'timeout'"
+                ), {"since": seven_days_ago})
+                week_timeout_count = raw_res.scalar() or 0
+            except Exception as e2:
+                print(f"overview week_timeout raw also failed: {e2}")
+
+    async with async_session() as db:
+        try:
+            res = await db.execute(
+                select(ExecutionRecord)
+                .where(ExecutionRecord.status == ExecutionStatus.FAILED)
+                .order_by(ExecutionRecord.finished_at.desc())
+                .limit(1)
+            )
+            failed_record = res.scalar_one_or_none()
+            if failed_record:
+                last_failed_time = failed_record.finished_at
+                dag_result = await db.execute(select(DAG).where(DAG.id == failed_record.dag_id))
+                dag = dag_result.scalar_one_or_none()
+                last_failed_dag_name = dag.name if dag else None
+        except Exception as e:
+            print(f"overview last_failed error: {e}")
 
     return ScheduleOverview(
         today_triggers=today_total,
@@ -559,17 +587,21 @@ async def schedule_overview(db: AsyncSession = Depends(get_db)):
 
 async def _compute_dag_7d_stats(db: AsyncSession, dag_id: str) -> tuple[int, float]:
     seven_days_ago = datetime.utcnow() - timedelta(days=7)
-    result = await db.execute(
-        select(ExecutionRecord).where(
-            ExecutionRecord.dag_id == dag_id,
-            ExecutionRecord.triggered_at >= seven_days_ago,
-        )
-    )
-    records = result.scalars().all()
-    total = len(records)
+    try:
+        result = await db.execute(text(
+            "SELECT status::text as status "
+            "FROM execution_records "
+            "WHERE dag_id = :dag_id AND triggered_at >= :since"
+        ), {"dag_id": dag_id, "since": seven_days_ago})
+        rows = result.fetchall()
+    except Exception as e:
+        print(f"_compute_dag_7d_stats error: {e}")
+        return 0, 0.0
+
+    total = len(rows)
     if total == 0:
         return 0, 0.0
-    success = sum(1 for r in records if r.status == ExecutionStatus.SUCCESS)
+    success = sum(1 for r in rows if r.status == ExecutionStatus.SUCCESS.value)
     rate = round(success / total * 100, 1)
     return total, rate
 
