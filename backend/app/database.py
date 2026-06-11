@@ -82,8 +82,95 @@ async def _migrate_alert_tables():
             pass
 
 
+async def _migrate_enums_and_schedule_tables():
+    async with engine.begin() as conn:
+        try:
+            enum_rows = await conn.execute(text(
+                "SELECT t.typname, e.enumlabel "
+                "FROM pg_type t "
+                "JOIN pg_enum e ON t.oid = e.enumtypid "
+                "WHERE t.typname IN ('executionstatus', 'scheduleoperationtype')"
+            ))
+            enum_map: dict[str, set[str]] = {}
+            for typname, enumlabel in enum_rows.fetchall():
+                if typname not in enum_map:
+                    enum_map[typname] = set()
+                enum_map[typname].add(enumlabel)
+
+            execution_status_values = enum_map.get('executionstatus', set())
+            if execution_status_values and 'timeout' not in execution_status_values:
+                try:
+                    await conn.execute(text(
+                        "ALTER TYPE executionstatus ADD VALUE 'timeout'"
+                    ))
+                except Exception as e:
+                    print(f"Add executionstatus timeout value warning: {e}")
+
+            table_exists = await conn.execute(text(
+                "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'schedule_operation_logs')"
+            ))
+            schedule_table_exists = table_exists.scalar() or False
+
+            if not schedule_table_exists:
+                try:
+                    await conn.execute(text(
+                        """
+                        CREATE TABLE IF NOT EXISTS schedule_operation_logs (
+                            id VARCHAR PRIMARY KEY,
+                            dag_id VARCHAR NOT NULL REFERENCES dags(id) ON DELETE CASCADE,
+                            operation_type scheduleoperationtype NOT NULL,
+                            before_data JSON,
+                            after_data JSON,
+                            changed_fields JSON DEFAULT '[]',
+                            summary VARCHAR(500),
+                            operated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                        """
+                    ))
+                except Exception as e:
+                    if 'type "scheduleoperationtype" does not exist' in str(e):
+                        try:
+                            await conn.execute(text(
+                                "CREATE TYPE scheduleoperationtype AS ENUM ('enable', 'disable', 'edit', 'delete', 'create')"
+                            ))
+                            await conn.execute(text(
+                                """
+                                CREATE TABLE IF NOT EXISTS schedule_operation_logs (
+                                    id VARCHAR PRIMARY KEY,
+                                    dag_id VARCHAR NOT NULL REFERENCES dags(id) ON DELETE CASCADE,
+                                    operation_type scheduleoperationtype NOT NULL,
+                                    before_data JSON,
+                                    after_data JSON,
+                                    changed_fields JSON DEFAULT '[]',
+                                    summary VARCHAR(500),
+                                    operated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                                )
+                                """
+                            ))
+                        except Exception as e2:
+                            print(f"Create schedule tables warning: {e2}")
+                    else:
+                        print(f"Create schedule_operation_logs warning: {e}")
+
+            try:
+                idx_exists = await conn.execute(text(
+                    "SELECT indexname FROM pg_indexes WHERE tablename = 'schedule_operation_logs' AND indexname = 'ix_sched_op_dag'"
+                ))
+                if not idx_exists.fetchone():
+                    await conn.execute(text(
+                        "CREATE INDEX IF NOT EXISTS ix_sched_op_dag ON schedule_operation_logs (dag_id, operated_at)"
+                    ))
+            except Exception:
+                pass
+
+        except Exception as e:
+            print(f"Migration enums/schedule warning: {e}")
+            pass
+
+
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     await _migrate_add_dag_nodes_edges()
     await _migrate_alert_tables()
+    await _migrate_enums_and_schedule_tables()

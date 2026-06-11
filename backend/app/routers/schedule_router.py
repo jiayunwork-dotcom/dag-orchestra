@@ -7,7 +7,7 @@ from typing import Optional
 
 from croniter import croniter
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, func, delete, and_
+from sqlalchemy import select, func, delete, and_, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, async_session
@@ -511,13 +511,25 @@ async def schedule_overview(db: AsyncSession = Depends(get_db)):
     )
     running = running_count.scalar() or 0
 
-    week_timeout = await db.execute(
-        select(func.count()).where(
-            ExecutionRecord.triggered_at >= seven_days_ago,
-            ExecutionRecord.status == ExecutionStatus.TIMEOUT,
+    week_timeout_count = 0
+    try:
+        week_timeout = await db.execute(
+            select(func.count()).where(
+                ExecutionRecord.triggered_at >= seven_days_ago,
+                ExecutionRecord.status == ExecutionStatus.TIMEOUT,
+            )
         )
-    )
-    week_timeout_count = week_timeout.scalar() or 0
+        week_timeout_count = week_timeout.scalar() or 0
+    except Exception as e:
+        print(f"week_timeout query fallback: {e}")
+        try:
+            raw_res = await db.execute(text(
+                "SELECT COUNT(*) FROM execution_records "
+                "WHERE triggered_at >= :since AND status::text = 'timeout'"
+            ), {"since": seven_days_ago})
+            week_timeout_count = raw_res.scalar() or 0
+        except Exception as e2:
+            print(f"week_timeout raw query also failed: {e2}")
 
     last_failed = await db.execute(
         select(ExecutionRecord)
