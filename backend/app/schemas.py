@@ -193,7 +193,7 @@ class MetricsTimeSeries(BaseModel):
 class AlertRuleCreate(BaseModel):
     name: str
     metric_type: str
-    node_id: Optional[str] = None
+    node_id: str
     condition: str
     threshold: float
     duration_seconds: int = 0
@@ -205,14 +205,18 @@ class AlertRuleCreate(BaseModel):
 class AlertRuleOut(BaseModel):
     id: str
     dag_id: str
+    dag_name: Optional[str] = None
     name: str
     metric_type: str
-    node_id: Optional[str]
+    node_id: str
+    node_label: Optional[str] = None
     condition: str
     threshold: float
     duration_seconds: int
     severity: str
     enabled: bool
+    is_valid: bool
+    invalid_reason: Optional[str] = None
     silence_start: Optional[str]
     silence_end: Optional[str]
     created_at: datetime
@@ -224,13 +228,37 @@ class AlertHistoryOut(BaseModel):
     id: str
     alert_rule_id: str
     dag_id: str
+    rule_name: str
+    dag_name: str
+    metric_type: str
+    node_id: str
     current_value: float
+    threshold: float
+    condition: str
     duration_seconds: int
+    severity: str
     status: str
+    context_snapshot: dict
     triggered_at: datetime
     resolved_at: Optional[datetime]
 
     model_config = {"from_attributes": True}
+
+
+class AlertHistoryDetail(AlertHistoryOut):
+    pass
+
+
+class AlertPushMessage(BaseModel):
+    type: str = "alert"
+    id: str
+    rule_name: str
+    dag_id: str
+    dag_name: str
+    severity: str
+    current_value: float
+    threshold: float
+    triggered_at: datetime
 
 
 class CommentCreate(BaseModel):

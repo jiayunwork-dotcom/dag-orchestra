@@ -303,6 +303,11 @@ async def update_dag(
             if old:
                 old.is_archived = True
 
+    if body.nodes is not None:
+        current_node_ids = {n.id for n in new_nodes_list}
+        from app.routers.alert_router import _check_and_invalidate_rules
+        await _check_and_invalidate_rules(db, dag_id, current_node_ids)
+
     await db.commit()
     await db.refresh(dag)
 
@@ -340,6 +345,10 @@ async def delete_dag(dag_id: str, user: User = Depends(require_role(UserRole.ADM
     dag = result.scalar_one_or_none()
     if not dag:
         raise HTTPException(status_code=404, detail="DAG not found")
+
+    from app.routers.alert_router import _invalidate_rules_for_dag
+    await _invalidate_rules_for_dag(db, dag_id, "关联的DAG已被删除")
+
     await db.delete(dag)
     await db.commit()
 

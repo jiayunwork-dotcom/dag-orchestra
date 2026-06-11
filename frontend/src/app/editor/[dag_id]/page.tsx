@@ -31,7 +31,7 @@ import { useDAGStore } from '@/lib/store';
 import {
   NodeData, EdgeData, NodeType, NODE_CATEGORIES, getNodeCategory,
   getNodeLabel, ValidationResult, VersionInfo, Comment, AlertRule,
-  AlertHistoryItem, UserInfo, LogEntry,
+  AlertHistoryItem, UserInfo, LogEntry, AlertPushMessage,
 } from '@/types';
 import { v4 as uuidv4 } from 'uuid';
 import toast, { Toaster } from 'react-hot-toast';
@@ -226,6 +226,7 @@ export default function EditorPage() {
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const collabWsRef = useRef<WebSocket | null>(null);
+  const alertWsRef = useRef<WebSocket | null>(null);
   const [clipboard, setClipboard] = useState<{ nodes: NodeData[]; edges: EdgeData[] } | null>(null);
   const [contextMenu, setContextMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null);
 
@@ -233,11 +234,66 @@ export default function EditorPage() {
     loadDAG();
     connectMetricsWS();
     connectCollabWS();
+    connectAlertWS();
     return () => {
       wsRef.current?.close();
       collabWsRef.current?.close();
+      alertWsRef.current?.close();
     };
   }, [dagId]);
+
+  const connectAlertWS = () => {
+    const wsUrl = (process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8080') + '/ws/alerts';
+    const ws = new WebSocket(wsUrl);
+    alertWsRef.current = ws;
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data) as AlertPushMessage;
+        if (data.type === 'alert') {
+          showAlertToast(data);
+        }
+      } catch (e) {
+        console.error('WebSocket parse error:', e);
+      }
+    };
+
+    ws.onclose = () => {
+      setTimeout(connectAlertWS, 3000);
+    };
+  };
+
+  const showAlertToast = (alert: AlertPushMessage) => {
+    const severity = alert.severity;
+
+    const toastContent = (
+      <div className="flex flex-col">
+        <div className="font-semibold">{alert.rule_name}</div>
+        <div className="text-xs opacity-90">
+          {alert.dag_name} - 当前值: {alert.current_value.toFixed(2)} / 阈值: {alert.threshold}
+        </div>
+      </div>
+    );
+
+    if (severity === 'critical') {
+      toast.error(toastContent, {
+        duration: Infinity,
+        style: { background: '#dc2626', border: '1px solid #991b1b' },
+      });
+    } else if (severity === 'warning') {
+      toast(toastContent, {
+        duration: 5000,
+        style: { background: '#ca8a04', border: '1px solid #854d0e' },
+        icon: '⚠️',
+      });
+    } else {
+      toast(toastContent, {
+        duration: 3000,
+        style: { background: '#2563eb', border: '1px solid #1e40af' },
+        icon: 'ℹ️',
+      });
+    }
+  };
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -588,6 +644,7 @@ export default function EditorPage() {
         </div>
 
         <div className="flex items-center gap-2">
+          <button onClick={() => router.push('/alerts')} className="px-3 py-1.5 text-xs bg-slate-600 hover:bg-slate-500 rounded">告警中心</button>
           <button onClick={handleValidate} className="px-3 py-1.5 text-xs bg-slate-600 hover:bg-slate-500 rounded">验证</button>
           <button onClick={handleAutoLayout} className="px-3 py-1.5 text-xs bg-slate-600 hover:bg-slate-500 rounded">自动布局</button>
           <button onClick={handleSave} className="px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-700 rounded">保存 (Ctrl+S)</button>

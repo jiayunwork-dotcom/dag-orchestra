@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { monitoringApi, engineApi, dagApi } from '@/lib/api';
-import { NodeMetrics, DAGMetrics, MetricsTimeSeries, DAGInfo } from '@/types';
+import { NodeMetrics, DAGMetrics, MetricsTimeSeries, DAGInfo, AlertPushMessage } from '@/types';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import toast, { Toaster } from 'react-hot-toast';
 
@@ -19,15 +19,72 @@ export default function MonitoringPage() {
   const [engineStatus, setEngineStatus] = useState<any>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
+  const alertWsRef = useRef<WebSocket | null>(null);
+
   useEffect(() => {
     loadData();
     connectWS();
+    connectAlertWS();
     const interval = setInterval(loadData, 5000);
     return () => {
       clearInterval(interval);
       wsRef.current?.close();
+      alertWsRef.current?.close();
     };
   }, [dagId]);
+
+  const connectAlertWS = () => {
+    const wsUrl = (process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8080') + '/ws/alerts';
+    const ws = new WebSocket(wsUrl);
+    alertWsRef.current = ws;
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data) as AlertPushMessage;
+        if (data.type === 'alert') {
+          showAlertToast(data);
+        }
+      } catch (e) {
+        console.error('WebSocket parse error:', e);
+      }
+    };
+
+    ws.onclose = () => {
+      setTimeout(connectAlertWS, 3000);
+    };
+  };
+
+  const showAlertToast = (alert: AlertPushMessage) => {
+    const severity = alert.severity;
+
+    const toastContent = (
+      <div className="flex flex-col">
+        <div className="font-semibold">{alert.rule_name}</div>
+        <div className="text-xs opacity-90">
+          {alert.dag_name} - 当前值: {alert.current_value.toFixed(2)} / 阈值: {alert.threshold}
+        </div>
+      </div>
+    );
+
+    if (severity === 'critical') {
+      toast.error(toastContent, {
+        duration: Infinity,
+        style: { background: '#dc2626', border: '1px solid #991b1b' },
+      });
+    } else if (severity === 'warning') {
+      toast(toastContent, {
+        duration: 5000,
+        style: { background: '#ca8a04', border: '1px solid #854d0e' },
+        icon: '⚠️',
+      });
+    } else {
+      toast(toastContent, {
+        duration: 3000,
+        style: { background: '#2563eb', border: '1px solid #1e40af' },
+        icon: 'ℹ️',
+      });
+    }
+  };
 
   useEffect(() => {
     if (selectedNode) loadTimeseries();
@@ -124,6 +181,7 @@ export default function MonitoringPage() {
           </span>
         </div>
         <div className="flex items-center gap-2">
+          <button onClick={() => router.push('/alerts')} className="px-3 py-1.5 text-sm bg-slate-600 rounded hover:bg-slate-500">告警中心</button>
           <button onClick={() => router.push(`/editor/${dagId}`)} className="px-3 py-1.5 text-sm bg-slate-600 rounded hover:bg-slate-500">编辑器</button>
           {engineStatus?.running ? (
             <button onClick={handleStop} className="px-3 py-1.5 text-sm bg-red-600 rounded hover:bg-red-700">停止</button>

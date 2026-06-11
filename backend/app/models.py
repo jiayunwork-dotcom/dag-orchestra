@@ -25,6 +25,7 @@ class DAGStatus(str, enum.Enum):
 
 
 class AlertSeverity(str, enum.Enum):
+    INFO = "info"
     WARNING = "warning"
     CRITICAL = "critical"
 
@@ -104,12 +105,14 @@ class AlertRule(Base):
     dag_id = Column(String, ForeignKey("dags.id"), nullable=False)
     name = Column(String(200), nullable=False)
     metric_type = Column(String(50), nullable=False)
-    node_id = Column(String, nullable=True)
+    node_id = Column(String, nullable=False)
     condition = Column(String(20), nullable=False)
     threshold = Column(Float, nullable=False)
     duration_seconds = Column(Integer, default=0)
     severity = Column(Enum(AlertSeverity), default=AlertSeverity.WARNING)
     enabled = Column(Boolean, default=True)
+    is_valid = Column(Boolean, default=True)
+    invalid_reason = Column(String(200), nullable=True)
     silence_start = Column(String(5), nullable=True)
     silence_end = Column(String(5), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -123,9 +126,17 @@ class AlertHistory(Base):
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     alert_rule_id = Column(String, ForeignKey("alert_rules.id"), nullable=False)
     dag_id = Column(String, ForeignKey("dags.id"), nullable=False)
+    rule_name = Column(String(200), nullable=False)
+    dag_name = Column(String(200), nullable=False)
+    metric_type = Column(String(50), nullable=False)
+    node_id = Column(String, nullable=False)
     current_value = Column(Float, nullable=False)
+    threshold = Column(Float, nullable=False)
+    condition = Column(String(20), nullable=False)
     duration_seconds = Column(Integer, default=0)
+    severity = Column(Enum(AlertSeverity), default=AlertSeverity.WARNING)
     status = Column(Enum(AlertStatus), default=AlertStatus.ACTIVE)
+    context_snapshot = Column(JSON, default=dict)
     triggered_at = Column(DateTime, default=datetime.utcnow)
     resolved_at = Column(DateTime, nullable=True)
 

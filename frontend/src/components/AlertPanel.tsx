@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { alertApi } from '@/lib/api';
-import { AlertRule, AlertHistoryItem } from '@/types';
+import { alertApi, dagApi } from '@/lib/api';
+import { AlertRule, AlertHistoryItem, DAGDetail } from '@/types';
 import toast from 'react-hot-toast';
 
 interface AlertPanelProps {
@@ -10,19 +10,55 @@ interface AlertPanelProps {
   onClose: () => void;
 }
 
+const METRIC_TYPES = [
+  { value: 'throughput', label: '吞吐量' },
+  { value: 'latency', label: '延迟' },
+  { value: 'error_rate', label: '错误率' },
+  { value: 'backlog', label: '积压量' },
+];
+
+const CONDITIONS = [
+  { value: '>', label: '大于' },
+  { value: '<', label: '小于' },
+  { value: '>=', label: '大于等于' },
+  { value: '<=', label: '小于等于' },
+  { value: '==', label: '等于' },
+];
+
+const SEVERITY_OPTIONS = [
+  { value: 'info', label: '信息', color: 'bg-blue-600' },
+  { value: 'warning', label: '警告', color: 'bg-yellow-600' },
+  { value: 'critical', label: '严重', color: 'bg-red-600' },
+];
+
 export default function AlertPanel({ dagId, onClose }: AlertPanelProps) {
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [history, setHistory] = useState<AlertHistoryItem[]>([]);
   const [showCreate, setShowCreate] = useState(false);
+  const [editingRule, setEditingRule] = useState<AlertRule | null>(null);
+  const [dagDetail, setDagDetail] = useState<DAGDetail | null>(null);
+  const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
   const [form, setForm] = useState({
-    name: '', metric_type: 'latency', node_id: '', condition: '>',
-    threshold: 500, duration_seconds: 180, severity: 'warning',
-    silence_start: '', silence_end: '',
+    name: '',
+    node_id: '',
+    metric_type: 'latency',
+    condition: '>',
+    threshold: 500,
+    duration_seconds: 10,
+    severity: 'warning' as 'info' | 'warning' | 'critical',
   });
 
   useEffect(() => {
     loadData();
+    loadDagDetail();
   }, [dagId]);
+
+  const loadDagDetail = async () => {
+    try {
+      const res = await dagApi.get(dagId);
+      setDagDetail(res.data);
+    } catch {}
+  };
 
   const loadData = async () => {
     try {
@@ -35,22 +71,41 @@ export default function AlertPanel({ dagId, onClose }: AlertPanelProps) {
     } catch {}
   };
 
-  const handleCreate = async () => {
-    if (!form.name.trim()) return;
+  const handleSubmit = async () => {
+    if (!form.name.trim() || !form.node_id) {
+      toast.error('请填写完整信息');
+      return;
+    }
+
     try {
-      await alertApi.createRule(dagId, form);
+      if (editingRule) {
+        await alertApi.updateRule(editingRule.id, form);
+        toast.success('规则更新成功');
+      } else {
+        await alertApi.createRule(dagId, form);
+        toast.success('告警规则创建成功');
+      }
       setShowCreate(false);
+      setEditingRule(null);
       loadData();
-      toast.success('告警规则创建成功');
     } catch (err: any) {
-      toast.error(err.response?.data?.detail || '创建失败');
+      toast.error(err.response?.data?.detail || '操作失败');
     }
   };
 
+  const handleToggle = async (ruleId: string) => {
+    try {
+      await alertApi.toggleRule(ruleId);
+      loadData();
+    } catch {}
+  };
+
   const handleDelete = async (id: string) => {
+    if (!confirm('确定要删除此规则吗？')) return;
     try {
       await alertApi.deleteRule(id);
       loadData();
+      toast.success('已删除');
     } catch {}
   };
 
@@ -58,7 +113,50 @@ export default function AlertPanel({ dagId, onClose }: AlertPanelProps) {
     try {
       await alertApi.resolveAlert(id);
       loadData();
+      toast.success('已标记为已恢复');
     } catch {}
+  };
+
+  const openEditModal = (rule: AlertRule) => {
+    setEditingRule(rule);
+    setForm({
+      name: rule.name,
+      node_id: rule.node_id,
+      metric_type: rule.metric_type,
+      condition: rule.condition,
+      threshold: rule.threshold,
+      duration_seconds: rule.duration_seconds,
+      severity: rule.severity,
+    });
+    setShowCreate(true);
+  };
+
+  const getSeverityColor = (severity: string) => {
+    switch (severity) {
+      case 'info': return 'bg-blue-600';
+      case 'warning': return 'bg-yellow-600';
+      case 'critical': return 'bg-red-600';
+      default: return 'bg-slate-600';
+    }
+  };
+
+  const getSeverityLabel = (severity: string) => {
+    switch (severity) {
+      case 'info': return '信息';
+      case 'warning': return '警告';
+      case 'critical': return '严重';
+      default: return severity;
+    }
+  };
+
+  const getMetricLabel = (type: string) => {
+    return METRIC_TYPES.find(m => m.value === type)?.label || type;
+  };
+
+  const getNodeLabel = (nodeId: string) => {
+    if (!dagDetail) return nodeId;
+    const node = dagDetail.nodes.find(n => n.id === nodeId);
+    return node?.label || nodeId;
   };
 
   return (
@@ -70,116 +168,256 @@ export default function AlertPanel({ dagId, onClose }: AlertPanelProps) {
 
       <div className="p-4">
         <div className="flex items-center justify-between mb-4">
-          <h4 className="text-sm font-medium">告警规则 (最多20条)</h4>
+          <h4 className="text-sm font-medium">告警规则</h4>
           <button
-            onClick={() => setShowCreate(true)}
+            onClick={() => {
+              setEditingRule(null);
+              setForm({
+                name: '',
+                node_id: '',
+                metric_type: 'latency',
+                condition: '>',
+                threshold: 500,
+                duration_seconds: 10,
+                severity: 'warning',
+              });
+              setShowCreate(true);
+            }}
             className="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-700 rounded"
           >
             + 新增
           </button>
         </div>
 
-        <div className="space-y-2 mb-6">
-          {rules.map(r => (
-            <div key={r.id} className="p-3 bg-[#0f172a] border border-slate-600 rounded-lg">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">{r.name}</span>
-                <span className={`px-2 py-0.5 rounded text-xs ${r.severity === 'critical' ? 'bg-red-600' : 'bg-yellow-600'}`}>
-                  {r.severity === 'critical' ? '严重' : '警告'}
-                </span>
-              </div>
-              <div className="text-xs text-slate-400 mt-1">
-                {r.metric_type} {r.condition} {r.threshold}
-                {r.duration_seconds > 0 && ` 持续${r.duration_seconds}秒`}
-              </div>
-              {r.node_id && <div className="text-xs text-slate-500">节点: {r.node_id}</div>}
-              {r.silence_start && r.silence_end && (
-                <div className="text-xs text-slate-500">静默: {r.silence_start}-{r.silence_end}</div>
-              )}
-              <button
-                onClick={() => handleDelete(r.id)}
-                className="mt-2 text-xs text-red-400 hover:text-red-300"
-              >
-                删除
-              </button>
+        <div className="space-y-2 mb-6 max-h-[40vh] overflow-y-auto">
+          {rules.length === 0 ? (
+            <div className="text-center py-4 text-slate-500 text-sm">
+              暂无告警规则
             </div>
-          ))}
+          ) : (
+            rules.map(r => (
+              <div
+                key={r.id}
+                className={`p-3 bg-[#0f172a] border rounded-lg ${
+                  !r.is_valid ? 'border-red-800 opacity-60' : 'border-slate-600'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium">{r.name}</span>
+                  <span className={`px-2 py-0.5 rounded text-xs ${getSeverityColor(r.severity)}`}>
+                    {getSeverityLabel(r.severity)}
+                  </span>
+                </div>
+                <div className="text-xs text-slate-400 mt-1">
+                  {getMetricLabel(r.metric_type)} {r.condition} {r.threshold}
+                  {r.duration_seconds > 0 && ` 持续${r.duration_seconds}秒`}
+                </div>
+                <div className="text-xs text-slate-500 mt-1">
+                  节点: {getNodeLabel(r.node_id)}
+                </div>
+                {!r.is_valid && (
+                  <div className="text-xs text-red-400 mt-1">
+                    无效 - {r.invalid_reason}
+                  </div>
+                )}
+                <div className="flex items-center gap-2 mt-2">
+                  <button
+                    onClick={() => handleToggle(r.id)}
+                    className={`text-xs px-2 py-0.5 rounded ${
+                      r.enabled
+                        ? 'bg-green-700 hover:bg-green-600'
+                        : 'bg-slate-700 hover:bg-slate-600'
+                    }`}
+                  >
+                    {r.enabled ? '已启用' : '已停用'}
+                  </button>
+                  <button
+                    onClick={() => openEditModal(r)}
+                    className="text-xs text-blue-400 hover:text-blue-300"
+                  >
+                    编辑
+                  </button>
+                  <button
+                    onClick={() => handleDelete(r.id)}
+                    className="text-xs text-red-400 hover:text-red-300"
+                  >
+                    删除
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
         </div>
 
         <h4 className="text-sm font-medium mb-3">告警历史</h4>
-        <div className="space-y-2">
-          {history.map(h => (
-            <div key={h.id} className="p-2 bg-[#0f172a] border border-slate-600 rounded text-xs">
-              <div className="flex items-center justify-between">
-                <span className={`px-2 py-0.5 rounded ${
-                  h.status === 'active' ? 'bg-red-600' : h.status === 'silenced' ? 'bg-slate-600' : 'bg-green-600'
-                }`}>
-                  {h.status === 'active' ? '活跃' : h.status === 'silenced' ? '已静默' : '已恢复'}
-                </span>
-                <span className="text-slate-400">{new Date(h.triggered_at).toLocaleString('zh-CN')}</span>
-              </div>
-              <div className="mt-1 text-slate-300">当前值: {h.current_value}</div>
-              {h.status === 'active' && (
-                <button onClick={() => handleResolve(h.id)} className="mt-1 text-blue-400 hover:text-blue-300">
-                  标记已恢复
-                </button>
-              )}
+        <div className="space-y-2 max-h-[40vh] overflow-y-auto">
+          {history.length === 0 ? (
+            <div className="text-center py-4 text-slate-500 text-sm">
+              暂无告警历史
             </div>
-          ))}
+          ) : (
+            history.map(h => (
+              <div
+                key={h.id}
+                className="p-2 bg-[#0f172a] border border-slate-600 rounded text-xs"
+              >
+                <div
+                  className="flex items-center justify-between cursor-pointer"
+                  onClick={() => setExpandedHistoryId(expandedHistoryId === h.id ? null : h.id)}
+                >
+                  <span className={`px-2 py-0.5 rounded ${getSeverityColor(h.severity)}`}>
+                    {getSeverityLabel(h.severity)}
+                  </span>
+                  <span className="text-slate-400">
+                    {new Date(h.triggered_at).toLocaleString('zh-CN')}
+                  </span>
+                </div>
+                <div className="mt-1 text-slate-300">
+                  <div>{h.rule_name}</div>
+                  <div className="text-slate-400">
+                    {getMetricLabel(h.metric_type)}: {h.current_value.toFixed(2)} / {h.threshold}
+                  </div>
+                </div>
+
+                {expandedHistoryId === h.id && (
+                  <div className="mt-2 pt-2 border-t border-slate-700">
+                    <div className="text-slate-400 mb-1">节点指标快照:</div>
+                    <div className="space-y-1 max-h-32 overflow-y-auto">
+                      {Object.entries(h.context_snapshot.node_metrics || {}).map(([nodeId, metrics]: any) => (
+                        <div
+                          key={nodeId}
+                          className={`text-xs ${nodeId === h.context_snapshot.triggered_node ? 'text-blue-400' : 'text-slate-400'}`}
+                        >
+                          {nodeId}: 吞吐={metrics.throughput.toFixed(0)}, 延迟={metrics.latency_ms.toFixed(1)}ms
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between mt-2">
+                  <span className={`px-2 py-0.5 rounded text-xs ${
+                    h.status === 'active' ? 'bg-red-600' : h.status === 'resolved' ? 'bg-green-600' : 'bg-slate-600'
+                  }`}>
+                    {h.status === 'active' ? '活跃' : h.status === 'resolved' ? '已恢复' : '已静默'}
+                  </span>
+                  {h.status === 'active' && (
+                    <button
+                      onClick={() => handleResolve(h.id)}
+                      className="text-blue-400 hover:text-blue-300 text-xs"
+                    >
+                      标记已恢复
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))
+          )}
         </div>
 
         {showCreate && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="bg-[#1e293b] rounded-xl p-6 w-full max-w-md border border-slate-600">
-              <h3 className="text-lg font-semibold mb-4">新建告警规则</h3>
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 left-0">
+            <div className="bg-[#1e293b] rounded-xl p-6 w-full max-w-md border border-slate-600 max-h-[90vh] overflow-y-auto">
+              <h3 className="text-lg font-semibold mb-4">
+                {editingRule ? '编辑告警规则' : '新建告警规则'}
+              </h3>
               <div className="space-y-3">
-                <input placeholder="规则名称" value={form.name}
+                <input
+                  placeholder="规则名称"
+                  value={form.name}
                   onChange={e => setForm({...form, name: e.target.value})}
-                  className="w-full px-3 py-2 bg-[#0f172a] border border-slate-600 rounded text-sm text-slate-100" />
-                <select value={form.metric_type} onChange={e => setForm({...form, metric_type: e.target.value})}
-                  className="w-full px-3 py-2 bg-[#0f172a] border border-slate-600 rounded text-sm text-slate-100">
-                  <option value="latency">延迟</option>
-                  <option value="throughput">吞吐量</option>
-                  <option value="error_rate">错误率</option>
-                  <option value="backlog">积压量</option>
-                  <option value="global_throughput_drop">全局吞吐下降</option>
-                </select>
-                <input placeholder="节点ID (可选)" value={form.node_id}
-                  onChange={e => setForm({...form, node_id: e.target.value})}
-                  className="w-full px-3 py-2 bg-[#0f172a] border border-slate-600 rounded text-sm text-slate-100" />
-                <div className="flex gap-2">
-                  <select value={form.condition} onChange={e => setForm({...form, condition: e.target.value})}
-                    className="w-20 px-2 py-2 bg-[#0f172a] border border-slate-600 rounded text-sm text-slate-100">
-                    <option value=">">&gt;</option>
-                    <option value="<">&lt;</option>
-                    <option value=">=">&gt;=</option>
-                    <option value="<=">&lt;=</option>
-                    <option value="==">==</option>
-                  </select>
-                  <input type="number" value={form.threshold} onChange={e => setForm({...form, threshold: Number(e.target.value)})}
-                    className="flex-1 px-3 py-2 bg-[#0f172a] border border-slate-600 rounded text-sm text-slate-100" />
-                </div>
+                  className="w-full px-3 py-2 bg-[#0f172a] border border-slate-600 rounded text-sm text-slate-100 focus:outline-none focus:border-blue-500"
+                />
+
                 <div>
-                  <label className="text-xs text-slate-400">持续时长(秒)</label>
-                  <input type="number" value={form.duration_seconds} onChange={e => setForm({...form, duration_seconds: Number(e.target.value)})}
-                    className="w-full px-3 py-2 bg-[#0f172a] border border-slate-600 rounded text-sm text-slate-100" />
+                  <label className="block text-xs text-slate-400 mb-1">关联节点</label>
+                  <select
+                    value={form.node_id}
+                    onChange={e => setForm({...form, node_id: e.target.value})}
+                    className="w-full px-3 py-2 bg-[#0f172a] border border-slate-600 rounded text-sm text-slate-100 focus:outline-none focus:border-blue-500"
+                  >
+                    <option value="">请选择节点</option>
+                    {dagDetail?.nodes.map(node => (
+                      <option key={node.id} value={node.id}>{node.label}</option>
+                    ))}
+                  </select>
                 </div>
-                <select value={form.severity} onChange={e => setForm({...form, severity: e.target.value})}
-                  className="w-full px-3 py-2 bg-[#0f172a] border border-slate-600 rounded text-sm text-slate-100">
-                  <option value="warning">警告</option>
-                  <option value="critical">严重</option>
-                </select>
+
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">监控指标</label>
+                  <select
+                    value={form.metric_type}
+                    onChange={e => setForm({...form, metric_type: e.target.value})}
+                    className="w-full px-3 py-2 bg-[#0f172a] border border-slate-600 rounded text-sm text-slate-100 focus:outline-none focus:border-blue-500"
+                  >
+                    {METRIC_TYPES.map(m => (
+                      <option key={m.value} value={m.value}>{m.label}</option>
+                    ))}
+                  </select>
+                </div>
+
                 <div className="flex gap-2">
-                  <input placeholder="静默开始 HH:MM" value={form.silence_start}
-                    onChange={e => setForm({...form, silence_start: e.target.value})}
-                    className="flex-1 px-3 py-2 bg-[#0f172a] border border-slate-600 rounded text-sm text-slate-100" />
-                  <input placeholder="静默结束 HH:MM" value={form.silence_end}
-                    onChange={e => setForm({...form, silence_end: e.target.value})}
-                    className="flex-1 px-3 py-2 bg-[#0f172a] border border-slate-600 rounded text-sm text-slate-100" />
+                  <div className="flex-1">
+                    <label className="block text-xs text-slate-400 mb-1">条件</label>
+                    <select
+                      value={form.condition}
+                      onChange={e => setForm({...form, condition: e.target.value})}
+                      className="w-full px-2 py-2 bg-[#0f172a] border border-slate-600 rounded text-sm text-slate-100 focus:outline-none focus:border-blue-500"
+                    >
+                      {CONDITIONS.map(c => (
+                        <option key={c.value} value={c.value}>{c.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex-1">
+                    <label className="block text-xs text-slate-400 mb-1">阈值</label>
+                    <input
+                      type="number"
+                      step="any"
+                      value={form.threshold}
+                      onChange={e => setForm({...form, threshold: Number(e.target.value)})}
+                      className="w-full px-3 py-2 bg-[#0f172a] border border-slate-600 rounded text-sm text-slate-100 focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
                 </div>
-                <div className="flex gap-2 justify-end">
-                  <button onClick={() => setShowCreate(false)} className="px-4 py-2 bg-slate-600 rounded text-sm">取消</button>
-                  <button onClick={handleCreate} className="px-4 py-2 bg-blue-600 rounded text-sm">创建</button>
+
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">持续时长(秒)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={form.duration_seconds}
+                    onChange={e => setForm({...form, duration_seconds: Number(e.target.value)})}
+                    className="w-full px-3 py-2 bg-[#0f172a] border border-slate-600 rounded text-sm text-slate-100 focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">告警级别</label>
+                  <select
+                    value={form.severity}
+                    onChange={e => setForm({...form, severity: e.target.value as any})}
+                    className="w-full px-3 py-2 bg-[#0f172a] border border-slate-600 rounded text-sm text-slate-100 focus:outline-none focus:border-blue-500"
+                  >
+                    {SEVERITY_OPTIONS.map(s => (
+                      <option key={s.value} value={s.value}>{s.label}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex gap-2 justify-end pt-2">
+                  <button
+                    onClick={() => { setShowCreate(false); setEditingRule(null); }}
+                    className="px-4 py-2 bg-slate-600 rounded hover:bg-slate-500 text-sm"
+                  >
+                    取消
+                  </button>
+                  <button
+                    onClick={handleSubmit}
+                    className="px-4 py-2 bg-blue-600 rounded hover:bg-blue-700 text-sm"
+                  >
+                    {editingRule ? '保存' : '创建'}
+                  </button>
                 </div>
               </div>
             </div>

@@ -146,14 +146,18 @@ export interface DashboardStats {
 export interface AlertRule {
   id: string;
   dag_id: string;
+  dag_name?: string;
   name: string;
   metric_type: string;
-  node_id?: string;
+  node_id: string;
+  node_label?: string;
   condition: string;
   threshold: number;
   duration_seconds: number;
-  severity: 'warning' | 'critical';
+  severity: 'info' | 'warning' | 'critical';
   enabled: boolean;
+  is_valid: boolean;
+  invalid_reason?: string;
   silence_start?: string;
   silence_end?: string;
   created_at: string;
@@ -163,11 +167,41 @@ export interface AlertHistoryItem {
   id: string;
   alert_rule_id: string;
   dag_id: string;
+  rule_name: string;
+  dag_name: string;
+  metric_type: string;
+  node_id: string;
   current_value: number;
+  threshold: number;
+  condition: string;
   duration_seconds: number;
+  severity: 'info' | 'warning' | 'critical';
   status: 'active' | 'silenced' | 'resolved';
+  context_snapshot: {
+    node_metrics: Record<string, {
+      throughput: number;
+      latency_ms: number;
+      backlog: number;
+      error_rate: number;
+      health: string;
+    }>;
+    triggered_node: string;
+    triggered_value: number;
+  };
   triggered_at: string;
   resolved_at?: string;
+}
+
+export interface AlertPushMessage {
+  type: string;
+  id: string;
+  rule_name: string;
+  dag_id: string;
+  dag_name: string;
+  severity: 'info' | 'warning' | 'critical';
+  current_value: number;
+  threshold: number;
+  triggered_at: string;
 }
 
 export interface Comment {

@@ -56,10 +56,16 @@ export const dagApi = {
 
 export const alertApi = {
   listRules: (dagId: string) => api.get(`/alerts/rules/${dagId}`),
+  listAllRules: (params?: { enabled_only?: boolean; valid_only?: boolean }) =>
+    api.get('/alerts/rules', { params }),
   createRule: (dagId: string, data: any) => api.post(`/alerts/rules/${dagId}`, data),
   updateRule: (ruleId: string, data: any) => api.put(`/alerts/rules/${ruleId}`, data),
+  toggleRule: (ruleId: string) => api.patch(`/alerts/rules/${ruleId}/toggle`),
   deleteRule: (ruleId: string) => api.delete(`/alerts/rules/${ruleId}`),
-  listHistory: (dagId: string) => api.get(`/alerts/history/${dagId}`),
+  listHistory: (dagId: string) => api.get(`/alerts/history/dag/${dagId}`),
+  listAllHistory: (params?: { severity?: string; start_time?: string; end_time?: string; limit?: number }) =>
+    api.get('/alerts/history', { params }),
+  getHistoryDetail: (alertId: string) => api.get(`/alerts/history/${alertId}`),
   resolveAlert: (alertId: string) => api.post(`/alerts/history/${alertId}/resolve`),
 };
 

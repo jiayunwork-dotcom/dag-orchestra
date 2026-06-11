@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { dagApi, monitoringApi } from '@/lib/api';
-import { DAGInfo, DashboardStats } from '@/types';
+import { DAGInfo, DashboardStats, AlertPushMessage } from '@/types';
 import toast from 'react-hot-toast';
 import { Toaster } from 'react-hot-toast';
 
@@ -14,14 +14,79 @@ export default function DashboardPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState('');
   const [newDesc, setNewDesc] = useState('');
+  const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
     if (!token) { router.replace('/login'); return; }
     loadData();
+    connectAlertWebSocket();
     const interval = setInterval(loadStats, 5000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
+    };
   }, []);
+
+  const connectAlertWebSocket = () => {
+    const wsUrl = (process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8080') + '/ws/alerts';
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data) as AlertPushMessage;
+        if (data.type === 'alert') {
+          showAlertToast(data);
+        }
+      } catch (e) {
+        console.error('WebSocket parse error:', e);
+      }
+    };
+
+    ws.onclose = () => {
+      setTimeout(connectAlertWebSocket, 3000);
+    };
+  };
+
+  const showAlertToast = (alert: AlertPushMessage) => {
+    const severity = alert.severity;
+    const durations: Record<string, number> = {
+      info: 3000,
+      warning: 5000,
+      critical: Infinity,
+    };
+
+    const toastContent = (
+      <div className="flex flex-col">
+        <div className="font-semibold">{alert.rule_name}</div>
+        <div className="text-xs opacity-90">
+          {alert.dag_name} - 当前值: {alert.current_value.toFixed(2)} / 阈值: {alert.threshold}
+        </div>
+      </div>
+    );
+
+    if (severity === 'critical') {
+      toast.error(toastContent, {
+        duration: Infinity,
+        style: { background: '#dc2626', border: '1px solid #991b1b' },
+      });
+    } else if (severity === 'warning') {
+      toast(toastContent, {
+        duration: 5000,
+        style: { background: '#ca8a04', border: '1px solid #854d0e' },
+        icon: '⚠️',
+      });
+    } else {
+      toast(toastContent, {
+        duration: 3000,
+        style: { background: '#2563eb', border: '1px solid #1e40af' },
+        icon: 'ℹ️',
+      });
+    }
+  };
 
   const loadData = async () => {
     try {
@@ -82,6 +147,12 @@ export default function DashboardPage() {
             className="px-3 py-1.5 text-sm bg-blue-600 rounded hover:bg-blue-700"
           >
             仪表盘
+          </button>
+          <button
+            onClick={() => router.push('/alerts')}
+            className="px-3 py-1.5 text-sm bg-slate-600 rounded hover:bg-slate-500"
+          >
+            告警中心
           </button>
           <button
             onClick={() => { localStorage.removeItem('token'); router.push('/login'); }}

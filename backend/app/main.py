@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -9,6 +10,7 @@ from app.routers import (
     auth_router,
     dag_router,
     alert_router,
+    alert_ws_router,
     comment_router,
     monitoring_router,
     monitoring_ws_router,
@@ -20,7 +22,10 @@ from app.routers import (
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    from app.routers.alert_router import _evaluate_rules_loop
+    eval_task = asyncio.create_task(_evaluate_rules_loop())
     yield
+    eval_task.cancel()
 
 
 app = FastAPI(title="DAG Orchestra", version="1.0.0", lifespan=lifespan)
@@ -41,6 +46,7 @@ app.include_router(monitoring_router, prefix="/api")
 app.include_router(engine_router, prefix="/api")
 app.include_router(collab_router, prefix="/ws")
 app.include_router(monitoring_ws_router, prefix="/ws")
+app.include_router(alert_ws_router, prefix="/ws")
 
 
 @app.get("/api/health")
