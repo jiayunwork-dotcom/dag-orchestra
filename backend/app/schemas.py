@@ -429,6 +429,7 @@ class ScheduleOverview(BaseModel):
     running_count: int
     last_failed_dag_name: Optional[str] = None
     last_failed_time: Optional[datetime] = None
+    week_timeout_count: int = 0
 
 
 class ScheduleListItem(BaseModel):
@@ -439,3 +440,38 @@ class ScheduleListItem(BaseModel):
     enabled: bool
     next_trigger_time: Optional[datetime] = None
     last_execution_status: Optional[str] = None
+    last_7d_executions: int = 0
+    last_7d_success_rate: float = 0.0
+
+
+class ScheduleOperationLogOut(BaseModel):
+    id: str
+    dag_id: str
+    operation_type: str
+    changed_fields: list[str] = Field(default_factory=list)
+    summary: Optional[str] = None
+    operated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class DailyStats(BaseModel):
+    date: str
+    success: int = 0
+    failed: int = 0
+    timeout: int = 0
+
+
+class ExecutionStats(BaseModel):
+    daily_stats: list[DailyStats]
+    total_executions: int = 0
+    success_rate: float = 0.0
+    avg_duration_seconds: float = 0.0
+    max_duration_seconds: float = 0.0
+    has_data: bool = False
+
+
+class CronPreviewResponse(BaseModel):
+    valid: bool
+    error_message: Optional[str] = None
+    next_times: list[str] = Field(default_factory=list)

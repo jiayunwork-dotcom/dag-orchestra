@@ -103,10 +103,15 @@ export const scheduleApi = {
   createPlan: (dagId: string, data: any) => api.post(`/schedules/plans/${dagId}`, data),
   updatePlan: (dagId: string, data: any) => api.put(`/schedules/plans/${dagId}`, data),
   deletePlan: (dagId: string) => api.delete(`/schedules/plans/${dagId}`),
+  listOperations: (dagId: string, limit?: number) =>
+    api.get(`/schedules/plans/${dagId}/operations`, { params: limit ? { limit } : {} }),
   manualTrigger: (dagId: string) => api.post(`/schedules/trigger/${dagId}`),
   listExecutions: (dagId: string, params?: { status?: string; page?: number; page_size?: number }) =>
     api.get(`/schedules/executions/${dagId}`, { params }),
   getExecutionDetail: (executionId: string) => api.get(`/schedules/execution/${executionId}`),
+  getExecutionStats: (dagId: string) => api.get(`/schedules/executions/${dagId}/stats`),
+  previewCron: (expression: string) =>
+    api.get('/schedules/cron/preview', { params: { expression } }),
   getOverview: () => api.get('/schedules/overview'),
   listAllSchedules: (params?: { dag_name?: string; enabled?: boolean }) =>
     api.get('/schedules/list', { params }),

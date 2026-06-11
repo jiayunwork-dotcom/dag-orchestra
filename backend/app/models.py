@@ -189,6 +189,7 @@ class ExecutionStatus(str, enum.Enum):
     SUCCESS = "success"
     FAILED = "failed"
     RETRYING = "retrying"
+    TIMEOUT = "timeout"
 
 
 class TriggerType(str, enum.Enum):
@@ -215,3 +216,26 @@ class ExecutionRecord(Base):
         Index("ix_execution_dag_status", "dag_id", "status"),
         Index("ix_execution_triggered", "dag_id", "triggered_at"),
     )
+
+
+class ScheduleOperationType(str, enum.Enum):
+    ENABLE = "enable"
+    DISABLE = "disable"
+    EDIT = "edit"
+    DELETE = "delete"
+    CREATE = "create"
+
+
+class ScheduleOperationLog(Base):
+    __tablename__ = "schedule_operation_logs"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    dag_id = Column(String, ForeignKey("dags.id", ondelete="CASCADE"), nullable=False)
+    operation_type = Column(Enum(ScheduleOperationType), nullable=False)
+    before_data = Column(JSON, nullable=True)
+    after_data = Column(JSON, nullable=True)
+    changed_fields = Column(JSON, default=list)
+    summary = Column(String(500), nullable=True)
+    operated_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (Index("ix_sched_op_dag", "dag_id", "operated_at"),)

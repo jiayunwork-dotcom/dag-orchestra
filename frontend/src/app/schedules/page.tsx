@@ -1,10 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { scheduleApi } from '@/lib/api';
 import { ScheduleListItem, ScheduleOverview } from '@/types';
 import toast, { Toaster } from 'react-hot-toast';
+
+type SortKey = 'next_trigger_time' | 'last_7d_success_rate' | null;
+type SortDir = 'asc' | 'desc';
 
 export default function SchedulesPage() {
   const router = useRouter();
@@ -13,6 +16,8 @@ export default function SchedulesPage() {
   const [dagNameFilter, setDagNameFilter] = useState('');
   const [enabledFilter, setEnabledFilter] = useState<string>('');
   const [loading, setLoading] = useState(true);
+  const [sortKey, setSortKey] = useState<SortKey>(null);
+  const [sortDir, setSortDir] = useState<SortDir>('asc');
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -52,10 +57,41 @@ export default function SchedulesPage() {
   const statusColors: Record<string, string> = {
     running: 'bg-blue-600', success: 'bg-green-600',
     failed: 'bg-red-600', retrying: 'bg-yellow-600',
+    timeout: 'bg-orange-500',
   };
   const statusLabels: Record<string, string> = {
     running: '运行中', success: '成功',
     failed: '失败', retrying: '重试中',
+    timeout: '超时',
+  };
+
+  const handleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortKey(key);
+      setSortDir('asc');
+    }
+  };
+
+  const sortedSchedules = useMemo(() => {
+    if (!sortKey) return schedules;
+    return [...schedules].sort((a, b) => {
+      let va: any = a[sortKey];
+      let vb: any = b[sortKey];
+      if (sortKey === 'next_trigger_time') {
+        va = va ? new Date(va).getTime() : Infinity;
+        vb = vb ? new Date(vb).getTime() : Infinity;
+      }
+      if (va < vb) return sortDir === 'asc' ? -1 : 1;
+      if (va > vb) return sortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [schedules, sortKey, sortDir]);
+
+  const sortIndicator = (key: SortKey) => {
+    if (sortKey !== key) return ' ↕';
+    return sortDir === 'asc' ? ' ▲' : ' ▼';
   };
 
   return (
@@ -89,7 +125,7 @@ export default function SchedulesPage() {
       <div className="p-6">
         {overview && (
           <div
-            className="grid grid-cols-4 gap-4 mb-8 cursor-pointer"
+            className="grid grid-cols-5 gap-4 mb-8 cursor-pointer"
             onClick={() => router.push('/dashboard')}
           >
             <div className="bg-[#1e293b] rounded-lg p-4 border border-slate-700">
@@ -103,6 +139,10 @@ export default function SchedulesPage() {
             <div className="bg-[#1e293b] rounded-lg p-4 border border-slate-700">
               <div className="text-slate-400 text-sm">当前运行中</div>
               <div className="text-2xl font-bold text-cyan-400">{overview.running_count}</div>
+            </div>
+            <div className="bg-[#1e293b] rounded-lg p-4 border border-slate-700">
+              <div className="text-slate-400 text-sm">本周超时</div>
+              <div className="text-2xl font-bold text-orange-400">{overview.week_timeout_count || 0}</div>
             </div>
             <div className="bg-[#1e293b] rounded-lg p-4 border border-slate-700">
               <div className="text-slate-400 text-sm">最近失败</div>
@@ -149,13 +189,25 @@ export default function SchedulesPage() {
                   <th className="text-left px-4 py-3 text-sm font-medium text-slate-400">DAG名称</th>
                   <th className="text-left px-4 py-3 text-sm font-medium text-slate-400">Cron表达式</th>
                   <th className="text-left px-4 py-3 text-sm font-medium text-slate-400">状态</th>
-                  <th className="text-left px-4 py-3 text-sm font-medium text-slate-400">下次触发时间</th>
+                  <th
+                    className="text-left px-4 py-3 text-sm font-medium text-slate-400 cursor-pointer hover:text-slate-200 select-none"
+                    onClick={() => handleSort('next_trigger_time')}
+                  >
+                    下次触发时间{sortIndicator('next_trigger_time')}
+                  </th>
                   <th className="text-left px-4 py-3 text-sm font-medium text-slate-400">最近执行结果</th>
+                  <th className="text-left px-4 py-3 text-sm font-medium text-slate-400">最近7天执行次数</th>
+                  <th
+                    className="text-left px-4 py-3 text-sm font-medium text-slate-400 cursor-pointer hover:text-slate-200 select-none"
+                    onClick={() => handleSort('last_7d_success_rate')}
+                  >
+                    最近7天成功率{sortIndicator('last_7d_success_rate')}
+                  </th>
                   <th className="text-left px-4 py-3 text-sm font-medium text-slate-400">操作</th>
                 </tr>
               </thead>
               <tbody>
-                {schedules.map(schedule => (
+                {sortedSchedules.map(schedule => (
                   <tr key={schedule.plan_id} className="border-b border-slate-700/50 hover:bg-slate-800/50">
                     <td className="px-4 py-3 text-sm text-slate-200">{schedule.dag_name}</td>
                     <td className="px-4 py-3 text-sm text-slate-300 font-mono">{schedule.cron_expression}</td>
@@ -175,6 +227,14 @@ export default function SchedulesPage() {
                       ) : (
                         <span className="text-xs text-slate-500">无记录</span>
                       )}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-slate-300">
+                      {schedule.last_7d_executions}
+                    </td>
+                    <td className="px-4 py-3 text-sm">
+                      <span className={schedule.last_7d_success_rate >= 80 ? 'text-green-400' : schedule.last_7d_success_rate >= 50 ? 'text-yellow-400' : 'text-red-400'}>
+                        {schedule.last_7d_success_rate}%
+                      </span>
                     </td>
                     <td className="px-4 py-3">
                       <button

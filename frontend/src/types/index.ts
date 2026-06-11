@@ -282,7 +282,7 @@ export interface ExecutionRecord {
   dag_id: string;
   schedule_plan_id?: string;
   trigger_type: 'scheduled' | 'manual' | 'retry';
-  status: 'running' | 'success' | 'failed' | 'retrying';
+  status: 'running' | 'success' | 'failed' | 'retrying' | 'timeout';
   retry_attempt: number;
   parent_execution_id?: string;
   error_message?: string;
@@ -306,6 +306,7 @@ export interface ScheduleOverview {
   running_count: number;
   last_failed_dag_name?: string;
   last_failed_time?: string;
+  week_timeout_count: number;
 }
 
 export interface ScheduleListItem {
@@ -316,6 +317,39 @@ export interface ScheduleListItem {
   enabled: boolean;
   next_trigger_time?: string;
   last_execution_status?: string;
+  last_7d_executions: number;
+  last_7d_success_rate: number;
+}
+
+export interface ScheduleOperationLog {
+  id: string;
+  dag_id: string;
+  operation_type: 'enable' | 'disable' | 'edit' | 'delete' | 'create';
+  changed_fields: string[];
+  summary?: string;
+  operated_at: string;
+}
+
+export interface DailyStats {
+  date: string;
+  success: number;
+  failed: number;
+  timeout: number;
+}
+
+export interface ExecutionStats {
+  daily_stats: DailyStats[];
+  total_executions: number;
+  success_rate: number;
+  avg_duration_seconds: number;
+  max_duration_seconds: number;
+  has_data: boolean;
+}
+
+export interface CronPreviewResponse {
+  valid: boolean;
+  error_message?: string;
+  next_times: string[];
 }
 
 export const NODE_CATEGORIES = {

@@ -7,17 +7,20 @@ from typing import Optional
 
 from croniter import croniter
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, func, delete
+from sqlalchemy import select, func, delete, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, async_session
 from app.models import (
     DAG, DAGStatus, SchedulePlan, ExecutionRecord, ExecutionStatus, TriggerType,
+    ScheduleOperationLog, ScheduleOperationType,
 )
 from app.schemas import (
     SchedulePlanCreate, SchedulePlanUpdate, SchedulePlanOut,
     ExecutionRecordOut, ExecutionRecordDetail,
     ScheduleOverview, ScheduleListItem,
+    ScheduleOperationLogOut, ExecutionStats, DailyStats,
+    CronPreviewResponse,
 )
 
 router = APIRouter(prefix="/schedules", tags=["schedules"])
@@ -47,6 +50,82 @@ def compute_next_trigger(cron_expression: str) -> Optional[datetime]:
         return cron.get_next(datetime)
     except Exception:
         return None
+
+
+def compute_next_n_triggers(cron_expression: str, n: int = 5) -> list[datetime]:
+    try:
+        cron = croniter(cron_expression, datetime.utcnow())
+        return [cron.get_next(datetime) for _ in range(n)]
+    except Exception:
+        return []
+
+
+def _plan_to_dict(plan: SchedulePlan) -> dict:
+    return {
+        "cron_expression": plan.cron_expression,
+        "enabled": plan.enabled,
+        "max_concurrency": plan.max_concurrency,
+        "timeout_seconds": plan.timeout_seconds,
+        "retry_count": plan.retry_count,
+        "retry_interval": plan.retry_interval,
+    }
+
+
+_FIELD_LABELS = {
+    "cron_expression": "Cron表达式",
+    "enabled": "启用状态",
+    "max_concurrency": "最大并发数",
+    "timeout_seconds": "超时秒数",
+    "retry_count": "重试次数",
+    "retry_interval": "重试间隔",
+}
+
+
+def _compute_changed_summary(before: dict, after: dict) -> tuple[list[str], str]:
+    changed_fields = []
+    changes = []
+    for key in _FIELD_LABELS:
+        if key in before and key in after and before[key] != after[key]:
+            changed_fields.append(key)
+            label = _FIELD_LABELS[key]
+            if key == "enabled":
+                changes.append(f"{label}: {'启用' if before[key] else '禁用'} → {'启用' if after[key] else '禁用'}")
+            else:
+                changes.append(f"{label}: {before[key]} → {after[key]}")
+    summary = "; ".join(changes) if changes else None
+    return changed_fields, summary
+
+
+async def _log_operation(
+    db: AsyncSession,
+    dag_id: str,
+    operation_type: ScheduleOperationType,
+    before: Optional[dict] = None,
+    after: Optional[dict] = None,
+):
+    changed_fields = []
+    summary = None
+    if before and after:
+        changed_fields, summary = _compute_changed_summary(before, after)
+    elif operation_type == ScheduleOperationType.CREATE:
+        summary = "创建调度计划"
+    elif operation_type == ScheduleOperationType.DELETE:
+        summary = "删除调度计划"
+    elif operation_type == ScheduleOperationType.ENABLE:
+        summary = "启用调度计划"
+    elif operation_type == ScheduleOperationType.DISABLE:
+        summary = "禁用调度计划"
+
+    log = ScheduleOperationLog(
+        id=str(uuid.uuid4()),
+        dag_id=dag_id,
+        operation_type=operation_type,
+        before_data=before,
+        after_data=after,
+        changed_fields=changed_fields,
+        summary=summary,
+    )
+    db.add(log)
 
 
 def _build_plan_out(plan: SchedulePlan, dag_name: Optional[str] = None) -> SchedulePlanOut:
@@ -87,6 +166,17 @@ def _build_execution_out(record: ExecutionRecord) -> ExecutionRecordOut:
         duration_seconds=duration,
         is_retry=is_retry,
         retry_label=retry_label,
+    )
+
+
+def _build_log_out(log: ScheduleOperationLog) -> ScheduleOperationLogOut:
+    return ScheduleOperationLogOut(
+        id=log.id,
+        dag_id=log.dag_id,
+        operation_type=log.operation_type.value,
+        changed_fields=log.changed_fields or [],
+        summary=log.summary,
+        operated_at=log.operated_at,
     )
 
 
@@ -133,6 +223,10 @@ async def create_schedule_plan(
         retry_interval=body.retry_interval,
     )
     db.add(plan)
+
+    after = _plan_to_dict(plan)
+    await _log_operation(db, dag_id, ScheduleOperationType.CREATE, None, after)
+
     await db.commit()
     await db.refresh(plan)
     return _build_plan_out(plan, dag.name)
@@ -148,6 +242,12 @@ async def update_schedule_plan(
     plan = result.scalar_one_or_none()
     if not plan:
         raise HTTPException(status_code=404, detail="调度计划不存在")
+
+    before = _plan_to_dict(plan)
+
+    enabled_changed = False
+    if body.enabled is not None and body.enabled != plan.enabled:
+        enabled_changed = True
 
     if body.cron_expression is not None:
         if not validate_cron(body.cron_expression):
@@ -172,6 +272,14 @@ async def update_schedule_plan(
         plan.retry_interval = body.retry_interval
 
     plan.updated_at = datetime.utcnow()
+
+    after = _plan_to_dict(plan)
+    if enabled_changed:
+        op_type = ScheduleOperationType.ENABLE if body.enabled else ScheduleOperationType.DISABLE
+        await _log_operation(db, dag_id, op_type, before, after)
+    if before != after:
+        await _log_operation(db, dag_id, ScheduleOperationType.EDIT, before, after)
+
     await db.commit()
     await db.refresh(plan)
 
@@ -186,9 +294,29 @@ async def delete_schedule_plan(dag_id: str, db: AsyncSession = Depends(get_db)):
     plan = result.scalar_one_or_none()
     if not plan:
         raise HTTPException(status_code=404, detail="调度计划不存在")
+
+    before = _plan_to_dict(plan)
+    await _log_operation(db, dag_id, ScheduleOperationType.DELETE, before, None)
+
     await db.delete(plan)
     await db.execute(delete(ExecutionRecord).where(ExecutionRecord.dag_id == dag_id))
     await db.commit()
+
+
+@router.get("/plans/{dag_id}/operations", response_model=list[ScheduleOperationLogOut])
+async def list_schedule_operations(
+    dag_id: str,
+    limit: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(ScheduleOperationLog)
+        .where(ScheduleOperationLog.dag_id == dag_id)
+        .order_by(ScheduleOperationLog.operated_at.desc())
+        .limit(limit)
+    )
+    logs = result.scalars().all()
+    return [_build_log_out(log) for log in logs]
 
 
 @router.post("/trigger/{dag_id}")
@@ -275,9 +403,94 @@ async def get_execution_detail(execution_id: str, db: AsyncSession = Depends(get
     return _build_execution_out(record)
 
 
+@router.get("/executions/{dag_id}/stats", response_model=ExecutionStats)
+async def get_execution_stats(dag_id: str, db: AsyncSession = Depends(get_db)):
+    seven_days_ago = datetime.utcnow() - timedelta(days=7)
+    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+
+    result = await db.execute(
+        select(ExecutionRecord).where(
+            ExecutionRecord.dag_id == dag_id,
+            ExecutionRecord.triggered_at >= seven_days_ago,
+        )
+    )
+    records = result.scalars().all()
+
+    if not records:
+        return ExecutionStats(
+            daily_stats=[],
+            total_executions=0,
+            success_rate=0.0,
+            avg_duration_seconds=0.0,
+            max_duration_seconds=0.0,
+            has_data=False,
+        )
+
+    daily_map: dict[str, DailyStats] = {}
+    for i in range(7):
+        d = today_start - timedelta(days=6 - i)
+        date_str = d.strftime("%Y-%m-%d")
+        daily_map[date_str] = DailyStats(date=date_str)
+
+    total_success = 0
+    total_count = 0
+    durations = []
+
+    for rec in records:
+        date_str = rec.triggered_at.strftime("%Y-%m-%d")
+        if date_str not in daily_map:
+            daily_map[date_str] = DailyStats(date=date_str)
+        ds = daily_map[date_str]
+        if rec.status == ExecutionStatus.SUCCESS:
+            ds.success += 1
+            total_success += 1
+        elif rec.status == ExecutionStatus.FAILED:
+            ds.failed += 1
+        elif rec.status == ExecutionStatus.TIMEOUT:
+            ds.timeout += 1
+
+        total_count += 1
+        if rec.finished_at and rec.triggered_at:
+            dur = (rec.finished_at - rec.triggered_at).total_seconds()
+            durations.append(dur)
+
+    sorted_dates = sorted(daily_map.keys())
+    daily_stats = [daily_map[d] for d in sorted_dates[-7:]]
+
+    success_rate = round(total_success / total_count * 100, 1) if total_count > 0 else 0.0
+    avg_duration = round(sum(durations) / len(durations), 1) if durations else 0.0
+    max_duration = round(max(durations), 1) if durations else 0.0
+
+    return ExecutionStats(
+        daily_stats=daily_stats,
+        total_executions=total_count,
+        success_rate=success_rate,
+        avg_duration_seconds=avg_duration,
+        max_duration_seconds=max_duration,
+        has_data=True,
+    )
+
+
+@router.get("/cron/preview", response_model=CronPreviewResponse)
+async def preview_cron(expression: str = Query(..., description="Cron表达式")):
+    if not validate_cron(expression):
+        return CronPreviewResponse(
+            valid=False,
+            error_message="Cron表达式格式不合法，请输入标准五段式表达式",
+            next_times=[],
+        )
+    times = compute_next_n_triggers(expression, 5)
+    return CronPreviewResponse(
+        valid=True,
+        error_message=None,
+        next_times=[t.isoformat() for t in times],
+    )
+
+
 @router.get("/overview", response_model=ScheduleOverview)
 async def schedule_overview(db: AsyncSession = Depends(get_db)):
     today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    seven_days_ago = datetime.utcnow() - timedelta(days=7)
 
     today_triggers = await db.execute(
         select(func.count()).where(ExecutionRecord.triggered_at >= today_start)
@@ -297,6 +510,14 @@ async def schedule_overview(db: AsyncSession = Depends(get_db)):
         select(func.count()).where(ExecutionRecord.status == ExecutionStatus.RUNNING)
     )
     running = running_count.scalar() or 0
+
+    week_timeout = await db.execute(
+        select(func.count()).where(
+            ExecutionRecord.triggered_at >= seven_days_ago,
+            ExecutionRecord.status == ExecutionStatus.TIMEOUT,
+        )
+    )
+    week_timeout_count = week_timeout.scalar() or 0
 
     last_failed = await db.execute(
         select(ExecutionRecord)
@@ -320,7 +541,25 @@ async def schedule_overview(db: AsyncSession = Depends(get_db)):
         running_count=running,
         last_failed_dag_name=last_failed_dag_name,
         last_failed_time=last_failed_time,
+        week_timeout_count=week_timeout_count,
     )
+
+
+async def _compute_dag_7d_stats(db: AsyncSession, dag_id: str) -> tuple[int, float]:
+    seven_days_ago = datetime.utcnow() - timedelta(days=7)
+    result = await db.execute(
+        select(ExecutionRecord).where(
+            ExecutionRecord.dag_id == dag_id,
+            ExecutionRecord.triggered_at >= seven_days_ago,
+        )
+    )
+    records = result.scalars().all()
+    total = len(records)
+    if total == 0:
+        return 0, 0.0
+    success = sum(1 for r in records if r.status == ExecutionStatus.SUCCESS)
+    rate = round(success / total * 100, 1)
+    return total, rate
 
 
 @router.get("/list", response_model=list[ScheduleListItem])
@@ -355,6 +594,8 @@ async def list_all_schedules(
         last_record = last_exec.scalar_one_or_none()
         last_status = last_record.status.value if last_record else None
 
+        exec_7d, rate_7d = await _compute_dag_7d_stats(db, plan.dag_id)
+
         items.append(ScheduleListItem(
             plan_id=plan.id,
             dag_id=plan.dag_id,
@@ -363,6 +604,8 @@ async def list_all_schedules(
             enabled=plan.enabled,
             next_trigger_time=next_tt,
             last_execution_status=last_status,
+            last_7d_executions=exec_7d,
+            last_7d_success_rate=rate_7d,
         ))
     return items
 
@@ -377,15 +620,30 @@ async def _execute_dag(
     retry_attempt: int = 0,
     parent_execution_id: Optional[str] = None,
 ):
-    await asyncio.sleep(5)
+    simulate_duration = random.randint(3, 10)
+    if simulate_duration > timeout:
+        simulate_duration = timeout + 2
 
-    success = random.random() < 0.7
+    timed_out = False
+    try:
+        await asyncio.wait_for(asyncio.sleep(5), timeout=timeout)
+    except asyncio.TimeoutError:
+        timed_out = True
 
     async with async_session() as db:
         result = await db.execute(select(ExecutionRecord).where(ExecutionRecord.id == execution_id))
         record = result.scalar_one_or_none()
         if not record:
             return
+
+        if timed_out:
+            record.status = ExecutionStatus.TIMEOUT
+            record.error_message = "执行超时被终止"
+            record.finished_at = datetime.utcnow()
+            await db.commit()
+            return
+
+        success = random.random() < 0.7
 
         if success:
             record.status = ExecutionStatus.SUCCESS
@@ -432,9 +690,37 @@ async def _disable_schedule_for_dag(dag_id: str):
         result = await db.execute(select(SchedulePlan).where(SchedulePlan.dag_id == dag_id))
         plan = result.scalar_one_or_none()
         if plan and plan.enabled:
+            before = _plan_to_dict(plan)
             plan.enabled = False
             plan.updated_at = datetime.utcnow()
+            after = _plan_to_dict(plan)
+            await _log_operation(db, dag_id, ScheduleOperationType.DISABLE, before, after)
             await db.commit()
+
+
+async def _timeout_check_loop():
+    while True:
+        try:
+            async with async_session() as db:
+                now = datetime.utcnow()
+                result = await db.execute(
+                    select(ExecutionRecord, SchedulePlan)
+                    .join(SchedulePlan, ExecutionRecord.schedule_plan_id == SchedulePlan.id, isouter=True)
+                    .where(ExecutionRecord.status == ExecutionStatus.RUNNING)
+                )
+                rows = result.all()
+                for record, plan in rows:
+                    timeout = plan.timeout_seconds if plan else 3600
+                    elapsed = (now - record.triggered_at).total_seconds()
+                    if elapsed > timeout:
+                        record.status = ExecutionStatus.TIMEOUT
+                        record.error_message = "执行超时被终止"
+                        record.finished_at = now
+                await db.commit()
+        except Exception as e:
+            print(f"Timeout check loop error: {e}")
+
+        await asyncio.sleep(10)
 
 
 async def _schedule_loop():

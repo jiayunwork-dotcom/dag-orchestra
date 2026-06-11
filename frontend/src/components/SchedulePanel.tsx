@@ -1,15 +1,30 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { scheduleApi } from '@/lib/api';
-import { SchedulePlan, ExecutionRecord, ExecutionListResponse } from '@/types';
+import {
+  SchedulePlan, ExecutionRecord, ExecutionListResponse,
+  ScheduleOperationLog, ExecutionStats, CronPreviewResponse,
+} from '@/types';
 import toast from 'react-hot-toast';
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+  ResponsiveContainer,
+} from 'recharts';
 
 interface SchedulePanelProps {
   dagId: string;
   dagStatus: string;
   onClose: () => void;
 }
+
+const OPERATION_TYPE_LABELS: Record<string, string> = {
+  enable: '启用',
+  disable: '禁用',
+  edit: '编辑',
+  delete: '删除',
+  create: '创建',
+};
 
 export default function SchedulePanel({ dagId, dagStatus, onClose }: SchedulePanelProps) {
   const [plan, setPlan] = useState<SchedulePlan | null>(null);
@@ -31,16 +46,45 @@ export default function SchedulePanel({ dagId, dagStatus, onClose }: SchedulePan
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [expandedDetail, setExpandedDetail] = useState<ExecutionRecord | null>(null);
 
+  const [operations, setOperations] = useState<ScheduleOperationLog[]>([]);
+  const [showOperations, setShowOperations] = useState(false);
+
+  const [stats, setStats] = useState<ExecutionStats | null>(null);
+  const [showStats, setShowStats] = useState(true);
+
+  const [cronPreview, setCronPreview] = useState<CronPreviewResponse | null>(null);
+  const cronDebounceRef = useRef<NodeJS.Timeout | null>(null);
+
   const canCreatePlan = dagStatus === 'published' || dagStatus === 'running' || dagStatus === 'grayscale';
 
   useEffect(() => {
     loadPlan();
     loadExecutions();
+    loadStats();
+    loadOperations();
   }, [dagId]);
 
   useEffect(() => {
     loadExecutions();
   }, [execPage, execStatusFilter]);
+
+  useEffect(() => {
+    if (!showForm) return;
+    if (cronDebounceRef.current) {
+      clearTimeout(cronDebounceRef.current);
+    }
+    cronDebounceRef.current = setTimeout(async () => {
+      try {
+        const res = await scheduleApi.previewCron(cronExpression);
+        setCronPreview(res.data);
+      } catch {
+        setCronPreview(null);
+      }
+    }, 300);
+    return () => {
+      if (cronDebounceRef.current) clearTimeout(cronDebounceRef.current);
+    };
+  }, [cronExpression, showForm]);
 
   const loadPlan = async () => {
     setLoading(true);
@@ -74,7 +118,32 @@ export default function SchedulePanel({ dagId, dagStatus, onClose }: SchedulePan
     } catch {}
   };
 
+  const loadStats = async () => {
+    try {
+      const res = await scheduleApi.getExecutionStats(dagId);
+      setStats(res.data);
+    } catch {
+      setStats(null);
+    }
+  };
+
+  const loadOperations = async () => {
+    try {
+      const res = await scheduleApi.listOperations(dagId, 20);
+      setOperations(res.data);
+    } catch {
+      setOperations([]);
+    }
+  };
+
   const handleSave = async () => {
+    if (maxConcurrency > 1 && retryCount > 0) {
+      const confirmed = window.confirm(
+        '高并发+重试可能产生大量执行记录，确认继续？'
+      );
+      if (!confirmed) return;
+    }
+
     const data = {
       cron_expression: cronExpression,
       enabled,
@@ -96,6 +165,7 @@ export default function SchedulePanel({ dagId, dagStatus, onClose }: SchedulePan
       setEditing(false);
       setShowForm(false);
       loadExecutions();
+      loadOperations();
     } catch (err: any) {
       const errorMsg = err?.response?.data?.detail || err?.message || '保存失败';
       console.error('Save error:', err);
@@ -111,6 +181,7 @@ export default function SchedulePanel({ dagId, dagStatus, onClose }: SchedulePan
       setExecutions([]);
       setExecTotal(0);
       toast.success('调度计划已删除');
+      loadOperations();
     } catch {
       toast.error('删除失败');
     }
@@ -133,6 +204,7 @@ export default function SchedulePanel({ dagId, dagStatus, onClose }: SchedulePan
       setPlan(res.data);
       setEnabled(res.data.enabled);
       toast.success(res.data.enabled ? '调度计划已启用' : '调度计划已禁用');
+      loadOperations();
     } catch (err: any) {
       toast.error(err.response?.data?.detail || '操作失败');
     }
@@ -156,10 +228,12 @@ export default function SchedulePanel({ dagId, dagStatus, onClose }: SchedulePan
   const statusColors: Record<string, string> = {
     running: 'bg-blue-600', success: 'bg-green-600',
     failed: 'bg-red-600', retrying: 'bg-yellow-600',
+    timeout: 'bg-orange-500',
   };
   const statusLabels: Record<string, string> = {
     running: '运行中', success: '成功',
     failed: '失败', retrying: '重试中',
+    timeout: '超时',
   };
   const triggerLabels: Record<string, string> = {
     scheduled: '定时触发', manual: '手动触发', retry: '重试',
@@ -178,9 +252,17 @@ export default function SchedulePanel({ dagId, dagStatus, onClose }: SchedulePan
     return `${m}分${s}秒`;
   };
 
+  const chartData = useMemo(() => {
+    if (!stats?.has_data) return [];
+    return stats.daily_stats.map(d => ({
+      ...d,
+      date: d.date.slice(5),
+    }));
+  }, [stats]);
+
   return (
     <div className="fixed inset-0 bg-black/50 flex z-50">
-      <div className="ml-auto w-[640px] bg-[#1e293b] border-l border-slate-700 flex flex-col h-full overflow-hidden">
+      <div className="ml-auto w-[680px] bg-[#1e293b] border-l border-slate-700 flex flex-col h-full overflow-hidden">
         <div className="flex items-center justify-between p-4 border-b border-slate-700">
           <h3 className="text-lg font-semibold">调度管理</h3>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-200 text-xl">✕</button>
@@ -259,6 +341,24 @@ export default function SchedulePanel({ dagId, dagStatus, onClose }: SchedulePan
                         placeholder="0 * * * *"
                         className="w-full px-3 py-2 bg-[#1e293b] border border-slate-600 rounded text-slate-100 font-mono text-sm focus:outline-none focus:border-blue-500"
                       />
+                      {cronPreview && (
+                        <div className="mt-2 text-xs">
+                          {cronPreview.valid ? (
+                            <div>
+                              <div className="text-slate-400 mb-1">下次5次触发时间预览:</div>
+                              <ul className="space-y-0.5">
+                                {cronPreview.next_times.map((t, i) => (
+                                  <li key={i} className="text-green-400 font-mono">
+                                    {i + 1}. {formatTime(t)}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          ) : (
+                            <div className="text-red-400">{cronPreview.error_message}</div>
+                          )}
+                        </div>
+                      )}
                     </div>
                     <div className="flex items-center gap-3">
                       <label className="text-xs text-slate-400">是否启用</label>
@@ -311,6 +411,11 @@ export default function SchedulePanel({ dagId, dagStatus, onClose }: SchedulePan
                         />
                       </div>
                     </div>
+                    {maxConcurrency > 1 && retryCount > 0 && (
+                      <div className="text-xs text-yellow-400 bg-yellow-900/20 border border-yellow-700/40 rounded px-3 py-2">
+                        ⚠ 高并发+重试可能产生大量执行记录
+                      </div>
+                    )}
                     <div className="flex gap-2 justify-end pt-2">
                       <button
                         onClick={() => { setShowForm(false); setEditing(false); if (plan) { setCronExpression(plan.cron_expression); setEnabled(plan.enabled); setMaxConcurrency(plan.max_concurrency); setTimeoutSeconds(plan.timeout_seconds); setRetryCount(plan.retry_count); setRetryInterval(plan.retry_interval); }}}
@@ -341,6 +446,63 @@ export default function SchedulePanel({ dagId, dagStatus, onClose }: SchedulePan
                 </div>
               </div>
 
+              <div className="bg-[#0f172a] rounded-lg border border-slate-700">
+                <button
+                  onClick={() => setShowStats(s => !s)}
+                  className="w-full flex items-center justify-between p-3 text-left hover:bg-slate-800/30"
+                >
+                  <h4 className="font-medium text-slate-200">执行统计 (最近7天)</h4>
+                  <span className="text-slate-400">{showStats ? '▼' : '▶'}</span>
+                </button>
+                {showStats && (
+                  <div className="border-t border-slate-700 p-4">
+                    {!stats?.has_data ? (
+                      <div className="text-sm text-slate-500 text-center py-6">
+                        暂无统计数据
+                      </div>
+                    ) : (
+                      <>
+                        <div className="h-48 mb-4">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <LineChart data={chartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                              <XAxis dataKey="date" stroke="#94a3b8" fontSize={11} />
+                              <YAxis stroke="#94a3b8" fontSize={11} allowDecimals={false} />
+                              <Tooltip
+                                contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '4px' }}
+                                labelStyle={{ color: '#cbd5e1' }}
+                              />
+                              <Legend wrapperStyle={{ fontSize: '11px' }} />
+                              <Line type="monotone" dataKey="success" name="成功" stroke="#22c55e" strokeWidth={2} dot={{ r: 3 }} />
+                              <Line type="monotone" dataKey="failed" name="失败" stroke="#ef4444" strokeWidth={2} dot={{ r: 3 }} />
+                              <Line type="monotone" dataKey="timeout" name="超时" stroke="#f97316" strokeWidth={2} dot={{ r: 3 }} />
+                            </LineChart>
+                          </ResponsiveContainer>
+                        </div>
+                        <div className="grid grid-cols-4 gap-3 text-center text-xs">
+                          <div className="bg-slate-800/50 rounded p-2">
+                            <div className="text-slate-400">总执行</div>
+                            <div className="text-lg font-bold text-blue-400">{stats.total_executions}</div>
+                          </div>
+                          <div className="bg-slate-800/50 rounded p-2">
+                            <div className="text-slate-400">成功率</div>
+                            <div className="text-lg font-bold text-green-400">{stats.success_rate}%</div>
+                          </div>
+                          <div className="bg-slate-800/50 rounded p-2">
+                            <div className="text-slate-400">平均耗时</div>
+                            <div className="text-lg font-bold text-cyan-400">{formatDuration(stats.avg_duration_seconds)}</div>
+                          </div>
+                          <div className="bg-slate-800/50 rounded p-2">
+                            <div className="text-slate-400">最长耗时</div>
+                            <div className="text-lg font-bold text-orange-400">{formatDuration(stats.max_duration_seconds)}</div>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+
               <div>
                 <div className="flex items-center justify-between mb-3">
                   <h4 className="font-medium text-slate-200">执行历史</h4>
@@ -354,6 +516,7 @@ export default function SchedulePanel({ dagId, dagStatus, onClose }: SchedulePan
                     <option value="success">成功</option>
                     <option value="failed">失败</option>
                     <option value="retrying">重试中</option>
+                    <option value="timeout">超时</option>
                   </select>
                 </div>
 
@@ -396,7 +559,7 @@ export default function SchedulePanel({ dagId, dagStatus, onClose }: SchedulePan
                             <div className="text-slate-400">完整执行ID: <span className="text-slate-200 font-mono">{expandedDetail.id}</span></div>
                             <div className="text-slate-400">触发原因: <span className="text-slate-200">{triggerLabels[expandedDetail.trigger_type] || expandedDetail.trigger_type}</span></div>
                             {expandedDetail.error_message && (
-                              <div className="text-slate-400">错误信息: <span className="text-red-400">{expandedDetail.error_message}</span></div>
+                              <div className="text-slate-400">错误信息: <span className={expandedDetail.status === 'timeout' ? 'text-orange-400' : 'text-red-400'}>{expandedDetail.error_message}</span></div>
                             )}
                             <div className="text-slate-400">重试次数: <span className="text-slate-200">{expandedDetail.retry_attempt}</span></div>
                             {expandedDetail.parent_execution_id && (
@@ -425,6 +588,43 @@ export default function SchedulePanel({ dagId, dagStatus, onClose }: SchedulePan
                           下一页
                         </button>
                       </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="bg-[#0f172a] rounded-lg border border-slate-700">
+                <button
+                  onClick={() => setShowOperations(s => !s)}
+                  className="w-full flex items-center justify-between p-3 text-left hover:bg-slate-800/30"
+                >
+                  <h4 className="font-medium text-slate-200">操作记录</h4>
+                  <span className="text-slate-400">{showOperations ? '▼' : '▶'}</span>
+                </button>
+                {showOperations && (
+                  <div className="border-t border-slate-700">
+                    {operations.length === 0 ? (
+                      <div className="text-sm text-slate-500 text-center py-4">
+                        暂无操作记录
+                      </div>
+                    ) : (
+                      <ul className="divide-y divide-slate-700/50 max-h-64 overflow-y-auto">
+                        {operations.map(op => (
+                          <li key={op.id} className="p-3 text-xs">
+                            <div className="flex items-center justify-between">
+                              <span className="flex items-center gap-2">
+                                <span className="px-2 py-0.5 rounded bg-slate-700 text-slate-200">
+                                  {OPERATION_TYPE_LABELS[op.operation_type] || op.operation_type}
+                                </span>
+                              </span>
+                              <span className="text-slate-500">{formatTime(op.operated_at)}</span>
+                            </div>
+                            {op.summary && (
+                              <div className="mt-1 text-slate-400">{op.summary}</div>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
                     )}
                   </div>
                 )}
