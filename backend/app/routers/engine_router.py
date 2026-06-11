@@ -304,6 +304,14 @@ async def stop_dag_engine(dag_id: str, db: AsyncSession = Depends(get_db)):
 
     await stop_engine(dag_id)
     dag.status = DAGStatus.STOPPED
+
+    from app.models import SchedulePlan
+    plan_result = await db.execute(select(SchedulePlan).where(SchedulePlan.dag_id == dag_id))
+    plan = plan_result.scalar_one_or_none()
+    if plan and plan.enabled:
+        plan.enabled = False
+        plan.updated_at = datetime.utcnow()
+
     await db.commit()
     return {"status": "stopped"}
 

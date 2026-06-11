@@ -54,8 +54,12 @@ export default function SchedulePanel({ dagId, dagStatus, onClose }: SchedulePan
         setTimeoutSeconds(res.data.timeout_seconds);
         setRetryCount(res.data.retry_count);
         setRetryInterval(res.data.retry_interval);
+      } else {
+        setPlan(null);
       }
-    } catch {}
+    } catch {
+      setPlan(null);
+    }
     setLoading(false);
   };
 
@@ -91,8 +95,11 @@ export default function SchedulePanel({ dagId, dagStatus, onClose }: SchedulePan
       }
       setEditing(false);
       setShowForm(false);
+      loadExecutions();
     } catch (err: any) {
-      toast.error(err.response?.data?.detail || '保存失败');
+      const errorMsg = err?.response?.data?.detail || err?.message || '保存失败';
+      console.error('Save error:', err);
+      toast.error(errorMsg);
     }
   };
 
