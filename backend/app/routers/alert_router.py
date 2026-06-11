@@ -48,20 +48,26 @@ def _get_metric_value(metrics, metric_type: str) -> Optional[float]:
     return None
 
 
-def _get_node_label(dag: DAG, node_id: str) -> Optional[str]:
+async def _get_dag_nodes(db: AsyncSession, dag: DAG) -> list:
     if not dag:
-        return None
-    nodes = dag.nodes or []
+        return []
+    ver_result = await db.execute(
+        select(DAGVersion).where(DAGVersion.dag_id == dag.id).order_by(DAGVersion.version_number.desc()).limit(1)
+    )
+    latest = ver_result.scalar_one_or_none()
+    if latest and latest.nodes:
+        return latest.nodes or []
+    return dag.nodes or []
+
+
+def _get_node_label_from_nodes(nodes: list, node_id: str) -> Optional[str]:
     for n in nodes:
         if isinstance(n, dict) and n.get("id") == node_id:
             return n.get("label", node_id)
     return node_id
 
 
-def _check_node_exists(dag: DAG, node_id: str) -> bool:
-    if not dag:
-        return False
-    nodes = dag.nodes or []
+def _check_node_exists_in_nodes(nodes: list, node_id: str) -> bool:
     for n in nodes:
         if isinstance(n, dict) and n.get("id") == node_id:
             return True
@@ -106,6 +112,7 @@ async def list_all_alert_rules(
     for rule in rules:
         dag_result = await db.execute(select(DAG).where(DAG.id == rule.dag_id))
         dag = dag_result.scalar_one_or_none()
+        nodes = await _get_dag_nodes(db, dag) if dag else []
         rule_out = AlertRuleOut(
             id=rule.id,
             dag_id=rule.dag_id,
@@ -113,7 +120,7 @@ async def list_all_alert_rules(
             name=rule.name,
             metric_type=rule.metric_type,
             node_id=rule.node_id,
-            node_label=_get_node_label(dag, rule.node_id) if dag else rule.node_id,
+            node_label=_get_node_label_from_nodes(nodes, rule.node_id),
             condition=rule.condition,
             threshold=rule.threshold,
             duration_seconds=rule.duration_seconds,
@@ -136,6 +143,7 @@ async def list_alert_rules(dag_id: str, db: AsyncSession = Depends(get_db)):
 
     dag_result = await db.execute(select(DAG).where(DAG.id == dag_id))
     dag = dag_result.scalar_one_or_none()
+    nodes = await _get_dag_nodes(db, dag) if dag else []
 
     out_list = []
     for rule in rules:
@@ -146,7 +154,7 @@ async def list_alert_rules(dag_id: str, db: AsyncSession = Depends(get_db)):
             name=rule.name,
             metric_type=rule.metric_type,
             node_id=rule.node_id,
-            node_label=_get_node_label(dag, rule.node_id) if dag else rule.node_id,
+            node_label=_get_node_label_from_nodes(nodes, rule.node_id),
             condition=rule.condition,
             threshold=rule.threshold,
             duration_seconds=rule.duration_seconds,
@@ -174,7 +182,8 @@ async def create_alert_rule(
     if not dag:
         raise HTTPException(status_code=404, detail="DAG not found")
 
-    if not _check_node_exists(dag, body.node_id):
+    nodes = await _get_dag_nodes(db, dag)
+    if not _check_node_exists_in_nodes(nodes, body.node_id):
         raise HTTPException(status_code=400, detail=f"节点 {body.node_id} 不存在于该DAG")
 
     count_result = await db.execute(select(AlertRule).where(AlertRule.dag_id == dag_id))
@@ -211,7 +220,7 @@ async def create_alert_rule(
         name=rule.name,
         metric_type=rule.metric_type,
         node_id=rule.node_id,
-        node_label=_get_node_label(dag, rule.node_id),
+        node_label=_get_node_label_from_nodes(nodes, rule.node_id),
         condition=rule.condition,
         threshold=rule.threshold,
         duration_seconds=rule.duration_seconds,
@@ -237,7 +246,8 @@ async def update_alert_rule(rule_id: str, body: AlertRuleCreate, db: AsyncSessio
     if not dag:
         raise HTTPException(status_code=404, detail="DAG not found")
 
-    if not _check_node_exists(dag, body.node_id):
+    nodes = await _get_dag_nodes(db, dag)
+    if not _check_node_exists_in_nodes(nodes, body.node_id):
         raise HTTPException(status_code=400, detail=f"节点 {body.node_id} 不存在于该DAG")
 
     try:
@@ -266,7 +276,7 @@ async def update_alert_rule(rule_id: str, body: AlertRuleCreate, db: AsyncSessio
         name=rule.name,
         metric_type=rule.metric_type,
         node_id=rule.node_id,
-        node_label=_get_node_label(dag, rule.node_id),
+        node_label=_get_node_label_from_nodes(nodes, rule.node_id),
         condition=rule.condition,
         threshold=rule.threshold,
         duration_seconds=rule.duration_seconds,
@@ -293,6 +303,7 @@ async def toggle_alert_rule(rule_id: str, db: AsyncSession = Depends(get_db)):
 
     dag_result = await db.execute(select(DAG).where(DAG.id == rule.dag_id))
     dag = dag_result.scalar_one_or_none()
+    nodes = await _get_dag_nodes(db, dag) if dag else []
 
     return AlertRuleOut(
         id=rule.id,
@@ -301,7 +312,7 @@ async def toggle_alert_rule(rule_id: str, db: AsyncSession = Depends(get_db)):
         name=rule.name,
         metric_type=rule.metric_type,
         node_id=rule.node_id,
-        node_label=_get_node_label(dag, rule.node_id) if dag else rule.node_id,
+        node_label=_get_node_label_from_nodes(nodes, rule.node_id),
         condition=rule.condition,
         threshold=rule.threshold,
         duration_seconds=rule.duration_seconds,
