@@ -190,6 +190,14 @@ class MetricsTimeSeries(BaseModel):
     error_rate: list[float]
 
 
+class SilencePeriod(BaseModel):
+    repeat_mode: str = "daily"
+    start_time: str
+    end_time: str
+    weekday: Optional[int] = None
+    date: Optional[str] = None
+
+
 class AlertRuleCreate(BaseModel):
     name: str
     metric_type: str
@@ -198,8 +206,7 @@ class AlertRuleCreate(BaseModel):
     threshold: float
     duration_seconds: int = 0
     severity: str = "warning"
-    silence_start: Optional[str] = None
-    silence_end: Optional[str] = None
+    silence_periods: Optional[list[SilencePeriod]] = None
 
 
 class AlertRuleOut(BaseModel):
@@ -217,8 +224,8 @@ class AlertRuleOut(BaseModel):
     enabled: bool
     is_valid: bool
     invalid_reason: Optional[str] = None
-    silence_start: Optional[str]
-    silence_end: Optional[str]
+    silence_periods: list[SilencePeriod] = Field(default_factory=list)
+    is_silenced: bool = False
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -347,3 +354,13 @@ class CollabCursor(BaseModel):
     x: float
     y: float
     selected_nodes: list[str] = Field(default_factory=list)
+
+
+class BatchRuleIds(BaseModel):
+    rule_ids: list[str]
+
+
+class BatchOperationResult(BaseModel):
+    updated_count: int
+    skipped_count: int
+    skipped_reason: Optional[str] = None

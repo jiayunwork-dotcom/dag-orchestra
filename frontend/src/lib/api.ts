@@ -62,6 +62,9 @@ export const alertApi = {
   updateRule: (ruleId: string, data: any) => api.put(`/alerts/rules/${ruleId}`, data),
   toggleRule: (ruleId: string) => api.patch(`/alerts/rules/${ruleId}/toggle`),
   deleteRule: (ruleId: string) => api.delete(`/alerts/rules/${ruleId}`),
+  batchEnable: (ruleIds: string[]) => api.post('/alerts/rules/batch/enable', { rule_ids: ruleIds }),
+  batchDisable: (ruleIds: string[]) => api.post('/alerts/rules/batch/disable', { rule_ids: ruleIds }),
+  batchDelete: (ruleIds: string[]) => api.post('/alerts/rules/batch/delete', { rule_ids: ruleIds }),
   listHistory: (dagId: string) => api.get(`/alerts/history/dag/${dagId}`),
   listAllHistory: (params?: { severity?: string; start_time?: string; end_time?: string; limit?: number }) =>
     api.get('/alerts/history', { params }),

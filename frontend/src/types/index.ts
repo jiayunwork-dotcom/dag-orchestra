@@ -143,6 +143,14 @@ export interface DashboardStats {
   checkpoint_success_rate: number;
 }
 
+export interface SilencePeriod {
+  repeat_mode: 'daily' | 'weekly' | 'once';
+  start_time: string;
+  end_time: string;
+  weekday?: number;
+  date?: string;
+}
+
 export interface AlertRule {
   id: string;
   dag_id: string;
@@ -158,8 +166,8 @@ export interface AlertRule {
   enabled: boolean;
   is_valid: boolean;
   invalid_reason?: string;
-  silence_start?: string;
-  silence_end?: string;
+  silence_periods: SilencePeriod[];
+  is_silenced: boolean;
   created_at: string;
 }
 

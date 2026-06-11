@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { alertApi, dagApi } from '@/lib/api';
-import { AlertRule, AlertHistoryItem, DAGDetail } from '@/types';
+import { AlertRule, AlertHistoryItem, DAGDetail, SilencePeriod } from '@/types';
 import toast from 'react-hot-toast';
 
 interface AlertPanelProps {
@@ -31,6 +31,28 @@ const SEVERITY_OPTIONS = [
   { value: 'critical', label: '严重', color: 'bg-red-600' },
 ];
 
+const REPEAT_MODE_OPTIONS = [
+  { value: 'daily', label: '每天' },
+  { value: 'weekly', label: '每周' },
+  { value: 'once', label: '单次' },
+];
+
+const WEEKDAY_OPTIONS = [
+  { value: 0, label: '周一' },
+  { value: 1, label: '周二' },
+  { value: 2, label: '周三' },
+  { value: 3, label: '周四' },
+  { value: 4, label: '周五' },
+  { value: 5, label: '周六' },
+  { value: 6, label: '周日' },
+];
+
+const EMPTY_SILENCE_PERIOD: SilencePeriod = {
+  repeat_mode: 'daily',
+  start_time: '02:00',
+  end_time: '06:00',
+};
+
 export default function AlertPanel({ dagId, onClose }: AlertPanelProps) {
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [history, setHistory] = useState<AlertHistoryItem[]>([]);
@@ -46,7 +68,9 @@ export default function AlertPanel({ dagId, onClose }: AlertPanelProps) {
     threshold: 500,
     duration_seconds: 10,
     severity: 'warning' as 'info' | 'warning' | 'critical',
+    silence_periods: [] as SilencePeriod[],
   });
+  const [newSilencePeriod, setNewSilencePeriod] = useState<SilencePeriod>({ ...EMPTY_SILENCE_PERIOD });
 
   useEffect(() => {
     loadData();
@@ -127,7 +151,9 @@ export default function AlertPanel({ dagId, onClose }: AlertPanelProps) {
       threshold: rule.threshold,
       duration_seconds: rule.duration_seconds,
       severity: rule.severity,
+      silence_periods: rule.silence_periods?.length ? [...rule.silence_periods] : [],
     });
+    setNewSilencePeriod({ ...EMPTY_SILENCE_PERIOD });
     setShowCreate(true);
   };
 
@@ -159,6 +185,42 @@ export default function AlertPanel({ dagId, onClose }: AlertPanelProps) {
     return node?.label || nodeId;
   };
 
+  const formatSilencePeriod = (p: SilencePeriod) => {
+    const timeRange = `${p.start_time}-${p.end_time}`;
+    if (p.repeat_mode === 'daily') {
+      return `每天 ${timeRange}`;
+    } else if (p.repeat_mode === 'weekly') {
+      const weekdayLabel = WEEKDAY_OPTIONS.find(w => w.value === p.weekday)?.label || '';
+      return `每${weekdayLabel} ${timeRange}`;
+    } else {
+      return `${p.date || ''} ${timeRange}`;
+    }
+  };
+
+  const addSilencePeriod = () => {
+    const p = { ...newSilencePeriod };
+    if (p.repeat_mode === 'once' && !p.date) {
+      toast.error('单次模式需要选择日期');
+      return;
+    }
+    if (p.repeat_mode === 'weekly' && p.weekday === undefined) {
+      toast.error('每周模式需要选择星期');
+      return;
+    }
+    setForm(prev => ({
+      ...prev,
+      silence_periods: [...prev.silence_periods, p],
+    }));
+    setNewSilencePeriod({ ...EMPTY_SILENCE_PERIOD });
+  };
+
+  const removeSilencePeriod = (index: number) => {
+    setForm(prev => ({
+      ...prev,
+      silence_periods: prev.silence_periods.filter((_, i) => i !== index),
+    }));
+  };
+
   return (
     <div className="fixed right-0 top-0 h-full w-96 bg-[#1e293b] border-l border-slate-700 z-50 overflow-y-auto shadow-2xl">
       <div className="flex items-center justify-between p-4 border-b border-slate-700">
@@ -180,7 +242,9 @@ export default function AlertPanel({ dagId, onClose }: AlertPanelProps) {
                 threshold: 500,
                 duration_seconds: 10,
                 severity: 'warning',
+                silence_periods: [],
               });
+              setNewSilencePeriod({ ...EMPTY_SILENCE_PERIOD });
               setShowCreate(true);
             }}
             className="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-700 rounded"
@@ -203,7 +267,14 @@ export default function AlertPanel({ dagId, onClose }: AlertPanelProps) {
                 }`}
               >
                 <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">{r.name}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium">{r.name}</span>
+                    {r.is_silenced && (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-500 text-slate-200">
+                        静默中
+                      </span>
+                    )}
+                  </div>
                   <span className={`px-2 py-0.5 rounded text-xs ${getSeverityColor(r.severity)}`}>
                     {getSeverityLabel(r.severity)}
                   </span>
@@ -215,6 +286,15 @@ export default function AlertPanel({ dagId, onClose }: AlertPanelProps) {
                 <div className="text-xs text-slate-500 mt-1">
                   节点: {getNodeLabel(r.node_id)}
                 </div>
+                {r.silence_periods && r.silence_periods.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {r.silence_periods.map((p, i) => (
+                      <span key={i} className="px-1.5 py-0.5 bg-slate-700 rounded text-[10px] text-slate-400">
+                        {formatSilencePeriod(p)}
+                      </span>
+                    ))}
+                  </div>
+                )}
                 {!r.is_valid && (
                   <div className="text-xs text-red-400 mt-1">
                     无效 - {r.invalid_reason}
@@ -403,6 +483,108 @@ export default function AlertPanel({ dagId, onClose }: AlertPanelProps) {
                       <option key={s.value} value={s.value}>{s.label}</option>
                     ))}
                   </select>
+                </div>
+
+                <div className="border-t border-slate-700 pt-3">
+                  <label className="block text-xs text-slate-400 mb-1">静默时段</label>
+
+                  {form.silence_periods.length > 0 && (
+                    <div className="space-y-1 mb-2">
+                      {form.silence_periods.map((period, index) => (
+                        <div
+                          key={index}
+                          className="flex items-center justify-between px-2 py-1 bg-[#0f172a] border border-slate-700 rounded text-xs"
+                        >
+                          <span className="text-slate-300">{formatSilencePeriod(period)}</span>
+                          <button
+                            onClick={() => removeSilencePeriod(index)}
+                            className="text-red-400 hover:text-red-300 text-xs ml-2"
+                          >
+                            删除
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="p-2 bg-[#0f172a] border border-slate-700 rounded space-y-2">
+                    <div className="flex gap-2">
+                      <div className="flex-1">
+                        <select
+                          value={newSilencePeriod.repeat_mode}
+                          onChange={e => setNewSilencePeriod({
+                            ...newSilencePeriod,
+                            repeat_mode: e.target.value as 'daily' | 'weekly' | 'once',
+                          })}
+                          className="w-full px-2 py-1 bg-[#1e293b] border border-slate-600 rounded text-xs text-slate-100 focus:outline-none"
+                        >
+                          {REPEAT_MODE_OPTIONS.map(o => (
+                            <option key={o.value} value={o.value}>{o.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                      {newSilencePeriod.repeat_mode === 'weekly' && (
+                        <div className="flex-1">
+                          <select
+                            value={newSilencePeriod.weekday ?? ''}
+                            onChange={e => setNewSilencePeriod({
+                              ...newSilencePeriod,
+                              weekday: e.target.value !== '' ? Number(e.target.value) : undefined,
+                            })}
+                            className="w-full px-2 py-1 bg-[#1e293b] border border-slate-600 rounded text-xs text-slate-100 focus:outline-none"
+                          >
+                            <option value="">星期</option>
+                            {WEEKDAY_OPTIONS.map(w => (
+                              <option key={w.value} value={w.value}>{w.label}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                      {newSilencePeriod.repeat_mode === 'once' && (
+                        <div className="flex-1">
+                          <input
+                            type="date"
+                            value={newSilencePeriod.date || ''}
+                            onChange={e => setNewSilencePeriod({
+                              ...newSilencePeriod,
+                              date: e.target.value,
+                            })}
+                            className="w-full px-2 py-1 bg-[#1e293b] border border-slate-600 rounded text-xs text-slate-100 focus:outline-none"
+                          />
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      <div className="flex-1">
+                        <input
+                          type="time"
+                          value={newSilencePeriod.start_time}
+                          onChange={e => setNewSilencePeriod({
+                            ...newSilencePeriod,
+                            start_time: e.target.value,
+                          })}
+                          className="w-full px-2 py-1 bg-[#1e293b] border border-slate-600 rounded text-xs text-slate-100 focus:outline-none"
+                        />
+                      </div>
+                      <div className="flex-1">
+                        <input
+                          type="time"
+                          value={newSilencePeriod.end_time}
+                          onChange={e => setNewSilencePeriod({
+                            ...newSilencePeriod,
+                            end_time: e.target.value,
+                          })}
+                          className="w-full px-2 py-1 bg-[#1e293b] border border-slate-600 rounded text-xs text-slate-100 focus:outline-none"
+                        />
+                      </div>
+                    </div>
+                    <button
+                      onClick={addSilencePeriod}
+                      className="w-full px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 rounded"
+                    >
+                      + 添加
+                    </button>
+                  </div>
                 </div>
 
                 <div className="flex gap-2 justify-end pt-2">

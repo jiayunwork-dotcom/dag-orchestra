@@ -113,8 +113,7 @@ class AlertRule(Base):
     enabled = Column(Boolean, default=True)
     is_valid = Column(Boolean, default=True)
     invalid_reason = Column(String(200), nullable=True)
-    silence_start = Column(String(5), nullable=True)
-    silence_end = Column(String(5), nullable=True)
+    silence_periods = Column(JSON, default=list)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     dag = relationship("DAG", back_populates="alerts")

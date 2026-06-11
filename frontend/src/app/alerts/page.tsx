@@ -4,7 +4,7 @@ import { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { Toaster, toast } from 'react-hot-toast';
 import { alertApi, dagApi } from '@/lib/api';
-import { AlertRule, AlertHistoryItem, AlertPushMessage, DAGInfo, DAGDetail } from '@/types';
+import { AlertRule, AlertHistoryItem, AlertPushMessage, DAGInfo, DAGDetail, SilencePeriod } from '@/types';
 
 const METRIC_TYPES = [
   { value: 'throughput', label: '吞吐量 (条/秒)' },
@@ -27,6 +27,28 @@ const SEVERITY_OPTIONS = [
   { value: 'critical', label: '严重', color: 'bg-red-600' },
 ];
 
+const REPEAT_MODE_OPTIONS = [
+  { value: 'daily', label: '每天' },
+  { value: 'weekly', label: '每周' },
+  { value: 'once', label: '单次' },
+];
+
+const WEEKDAY_OPTIONS = [
+  { value: 0, label: '周一' },
+  { value: 1, label: '周二' },
+  { value: 2, label: '周三' },
+  { value: 3, label: '周四' },
+  { value: 4, label: '周五' },
+  { value: 5, label: '周六' },
+  { value: 6, label: '周日' },
+];
+
+const EMPTY_SILENCE_PERIOD: SilencePeriod = {
+  repeat_mode: 'daily',
+  start_time: '02:00',
+  end_time: '06:00',
+};
+
 export default function AlertCenterPage() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<'rules' | 'history'>('rules');
@@ -46,12 +68,17 @@ export default function AlertCenterPage() {
     threshold: 500,
     duration_seconds: 10,
     severity: 'warning' as 'info' | 'warning' | 'critical',
+    silence_periods: [] as SilencePeriod[],
   });
 
+  const [newSilencePeriod, setNewSilencePeriod] = useState<SilencePeriod>({ ...EMPTY_SILENCE_PERIOD });
   const [selectedDagDetail, setSelectedDagDetail] = useState<DAGDetail | null>(null);
   const [severityFilter, setSeverityFilter] = useState<string>('');
   const [startTime, setStartTime] = useState<string>('');
   const [endTime, setEndTime] = useState<string>('');
+
+  const [selectedRuleIds, setSelectedRuleIds] = useState<Set<string>>(new Set());
+  const [showBatchDeleteConfirm, setShowBatchDeleteConfirm] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -224,6 +251,77 @@ export default function AlertCenterPage() {
     } catch (err) {}
   };
 
+  const handleBatchEnable = async () => {
+    const ids = Array.from(selectedRuleIds);
+    if (ids.length === 0) return;
+    try {
+      const res = await alertApi.batchEnable(ids);
+      const data = res.data;
+      if (data.skipped_count > 0) {
+        toast.success(`已启用${data.updated_count}条规则，${data.skipped_count}条无效规则已跳过`);
+      } else {
+        toast.success(`已启用${data.updated_count}条规则`);
+      }
+      setSelectedRuleIds(new Set());
+      loadData();
+    } catch (err) {
+      toast.error('批量启用失败');
+    }
+  };
+
+  const handleBatchDisable = async () => {
+    const ids = Array.from(selectedRuleIds);
+    if (ids.length === 0) return;
+    try {
+      const res = await alertApi.batchDisable(ids);
+      const data = res.data;
+      if (data.skipped_count > 0) {
+        toast.success(`已禁用${data.updated_count}条规则，${data.skipped_count}条无效规则已跳过`);
+      } else {
+        toast.success(`已禁用${data.updated_count}条规则`);
+      }
+      setSelectedRuleIds(new Set());
+      loadData();
+    } catch (err) {
+      toast.error('批量禁用失败');
+    }
+  };
+
+  const handleBatchDelete = async () => {
+    const ids = Array.from(selectedRuleIds);
+    if (ids.length === 0) return;
+    try {
+      const res = await alertApi.batchDelete(ids);
+      const data = res.data;
+      toast.success(`已删除${data.updated_count}条规则`);
+      setSelectedRuleIds(new Set());
+      setShowBatchDeleteConfirm(false);
+      loadData();
+    } catch (err) {
+      toast.error('批量删除失败');
+    }
+  };
+
+  const toggleRuleSelection = (ruleId: string) => {
+    setSelectedRuleIds(prev => {
+      const next = new Set(prev);
+      if (next.has(ruleId)) {
+        next.delete(ruleId);
+      } else {
+        next.add(ruleId);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedRuleIds.size === rules.length) {
+      setSelectedRuleIds(new Set());
+    } else {
+      setSelectedRuleIds(new Set(rules.map(r => r.id)));
+    }
+  };
+
   const openEditModal = (rule: AlertRule) => {
     setEditingRule(rule);
     setForm({
@@ -235,7 +333,9 @@ export default function AlertCenterPage() {
       threshold: rule.threshold,
       duration_seconds: rule.duration_seconds,
       severity: rule.severity,
+      silence_periods: rule.silence_periods?.length ? [...rule.silence_periods] : [],
     });
+    setNewSilencePeriod({ ...EMPTY_SILENCE_PERIOD });
     setShowCreateModal(true);
   };
 
@@ -250,13 +350,39 @@ export default function AlertCenterPage() {
       threshold: 500,
       duration_seconds: 10,
       severity: 'warning',
+      silence_periods: [],
     });
+    setNewSilencePeriod({ ...EMPTY_SILENCE_PERIOD });
     setShowCreateModal(true);
   };
 
   const closeModal = () => {
     setShowCreateModal(false);
     setEditingRule(null);
+  };
+
+  const addSilencePeriod = () => {
+    const p = { ...newSilencePeriod };
+    if (p.repeat_mode === 'once' && !p.date) {
+      toast.error('单次模式需要选择日期');
+      return;
+    }
+    if (p.repeat_mode === 'weekly' && p.weekday === undefined) {
+      toast.error('每周模式需要选择星期');
+      return;
+    }
+    setForm(prev => ({
+      ...prev,
+      silence_periods: [...prev.silence_periods, p],
+    }));
+    setNewSilencePeriod({ ...EMPTY_SILENCE_PERIOD });
+  };
+
+  const removeSilencePeriod = (index: number) => {
+    setForm(prev => ({
+      ...prev,
+      silence_periods: prev.silence_periods.filter((_, i) => i !== index),
+    }));
   };
 
   const getSeverityColor = (severity: string) => {
@@ -279,6 +405,18 @@ export default function AlertCenterPage() {
 
   const getMetricLabel = (type: string) => {
     return METRIC_TYPES.find(m => m.value === type)?.label || type;
+  };
+
+  const formatSilencePeriod = (p: SilencePeriod) => {
+    const timeRange = `${p.start_time}-${p.end_time}`;
+    if (p.repeat_mode === 'daily') {
+      return `每天 ${timeRange}`;
+    } else if (p.repeat_mode === 'weekly') {
+      const weekdayLabel = WEEKDAY_OPTIONS.find(w => w.value === p.weekday)?.label || '';
+      return `每${weekdayLabel} ${timeRange}`;
+    } else {
+      return `${p.date || ''} ${timeRange}`;
+    }
   };
 
   return (
@@ -345,7 +483,37 @@ export default function AlertCenterPage() {
         {activeTab === 'rules' && (
           <div>
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold">告警规则列表</h2>
+              <div className="flex items-center gap-3">
+                <h2 className="text-lg font-semibold">告警规则列表</h2>
+                {selectedRuleIds.size > 0 && (
+                  <div className="flex items-center gap-2 ml-4">
+                    <button
+                      onClick={handleBatchEnable}
+                      className="px-3 py-1.5 text-xs bg-green-600 hover:bg-green-700 rounded font-medium"
+                    >
+                      批量启用 ({selectedRuleIds.size})
+                    </button>
+                    <button
+                      onClick={handleBatchDisable}
+                      className="px-3 py-1.5 text-xs bg-slate-600 hover:bg-slate-500 rounded font-medium"
+                    >
+                      批量禁用 ({selectedRuleIds.size})
+                    </button>
+                    <button
+                      onClick={() => setShowBatchDeleteConfirm(true)}
+                      className="px-3 py-1.5 text-xs bg-red-600 hover:bg-red-700 rounded font-medium"
+                    >
+                      批量删除 ({selectedRuleIds.size})
+                    </button>
+                    <button
+                      onClick={() => setSelectedRuleIds(new Set())}
+                      className="px-3 py-1.5 text-xs text-slate-400 hover:text-slate-200"
+                    >
+                      取消选择
+                    </button>
+                  </div>
+                )}
+              </div>
               <button
                 onClick={openCreateModal}
                 className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm font-medium"
@@ -360,69 +528,104 @@ export default function AlertCenterPage() {
                   暂无告警规则，点击上方按钮创建
                 </div>
               ) : (
-                rules.map(rule => (
-                  <div
-                    key={rule.id}
-                    className={`p-4 bg-[#1e293b] rounded-lg border ${
-                      !rule.is_valid ? 'border-red-800 opacity-60' : 'border-slate-700'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-3 mb-2">
-                          <span className="font-medium text-slate-100">{rule.name}</span>
-                          <span className={`px-2 py-0.5 rounded text-xs text-white ${getSeverityColor(rule.severity)}`}>
-                            {getSeverityLabel(rule.severity)}
-                          </span>
-                          {!rule.is_valid && (
-                            <span className="px-2 py-0.5 rounded text-xs bg-red-900 text-red-300">
-                              无效 - {rule.invalid_reason}
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-sm text-slate-400 space-y-1">
-                          <div>
-                            关联DAG: <span className="text-slate-300">{rule.dag_name || rule.dag_id}</span>
-                            {' | '}
-                            节点: <span className="text-slate-300">{rule.node_label || rule.node_id}</span>
+                <>
+                  {rules.length > 0 && (
+                    <div className="flex items-center gap-3 px-4 py-2 text-sm text-slate-400">
+                      <input
+                        type="checkbox"
+                        checked={selectedRuleIds.size === rules.length}
+                        onChange={toggleSelectAll}
+                        className="rounded border-slate-600 bg-[#0f172a]"
+                      />
+                      <span>全选</span>
+                    </div>
+                  )}
+                  {rules.map(rule => (
+                    <div
+                      key={rule.id}
+                      className={`p-4 bg-[#1e293b] rounded-lg border ${
+                        !rule.is_valid ? 'border-red-800 opacity-60' : 'border-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between">
+                        <div className="flex items-start gap-3 flex-1">
+                          <input
+                            type="checkbox"
+                            checked={selectedRuleIds.has(rule.id)}
+                            onChange={() => toggleRuleSelection(rule.id)}
+                            className="mt-1 rounded border-slate-600 bg-[#0f172a]"
+                          />
+                          <div className="flex-1">
+                            <div className="flex items-center gap-3 mb-2">
+                              <span className="font-medium text-slate-100">{rule.name}</span>
+                              <span className={`px-2 py-0.5 rounded text-xs text-white ${getSeverityColor(rule.severity)}`}>
+                                {getSeverityLabel(rule.severity)}
+                              </span>
+                              {rule.is_silenced && (
+                                <span className="px-2 py-0.5 rounded text-xs bg-slate-500 text-slate-200">
+                                  静默中
+                                </span>
+                              )}
+                              {!rule.is_valid && (
+                                <span className="px-2 py-0.5 rounded text-xs bg-red-900 text-red-300">
+                                  无效 - {rule.invalid_reason}
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-sm text-slate-400 space-y-1">
+                              <div>
+                                关联DAG: <span className="text-slate-300">{rule.dag_name || rule.dag_id}</span>
+                                {' | '}
+                                节点: <span className="text-slate-300">{rule.node_label || rule.node_id}</span>
+                              </div>
+                              <div>
+                                监控指标: <span className="text-slate-300">{getMetricLabel(rule.metric_type)}</span>
+                                {' | '}
+                                条件: <span className="text-slate-300">
+                                  {rule.condition} {rule.threshold}
+                                  {rule.duration_seconds > 0 && ` 持续${rule.duration_seconds}秒`}
+                                </span>
+                              </div>
+                              {rule.silence_periods && rule.silence_periods.length > 0 && (
+                                <div>
+                                  静默时段: {rule.silence_periods.map((p, i) => (
+                                    <span key={i} className="inline-block mr-2 px-2 py-0.5 bg-slate-700 rounded text-xs text-slate-300">
+                                      {formatSilencePeriod(p)}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
                           </div>
-                          <div>
-                            监控指标: <span className="text-slate-300">{getMetricLabel(rule.metric_type)}</span>
-                            {' | '}
-                            条件: <span className="text-slate-300">
-                              {rule.condition} {rule.threshold}
-                              {rule.duration_seconds > 0 && ` 持续${rule.duration_seconds}秒`}
-                            </span>
-                          </div>
                         </div>
-                      </div>
-                      <div className="flex items-center gap-2 ml-4">
-                        <button
-                          onClick={() => handleToggle(rule.id)}
-                          className={`px-3 py-1 text-xs rounded ${
-                            rule.enabled
-                              ? 'bg-green-600 hover:bg-green-700'
-                              : 'bg-slate-600 hover:bg-slate-500'
-                          }`}
-                        >
-                          {rule.enabled ? '已启用' : '已停用'}
-                        </button>
-                        <button
-                          onClick={() => openEditModal(rule)}
-                          className="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-700 rounded"
-                        >
-                          编辑
-                        </button>
-                        <button
-                          onClick={() => handleDelete(rule.id)}
-                          className="px-3 py-1 text-xs bg-red-600 hover:bg-red-700 rounded"
-                        >
-                          删除
-                        </button>
+                        <div className="flex items-center gap-2 ml-4">
+                          <button
+                            onClick={() => handleToggle(rule.id)}
+                            className={`px-3 py-1 text-xs rounded ${
+                              rule.enabled
+                                ? 'bg-green-600 hover:bg-green-700'
+                                : 'bg-slate-600 hover:bg-slate-500'
+                            }`}
+                          >
+                            {rule.enabled ? '已启用' : '已停用'}
+                          </button>
+                          <button
+                            onClick={() => openEditModal(rule)}
+                            className="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-700 rounded"
+                          >
+                            编辑
+                          </button>
+                          <button
+                            onClick={() => handleDelete(rule.id)}
+                            className="px-3 py-1 text-xs bg-red-600 hover:bg-red-700 rounded"
+                          >
+                            删除
+                          </button>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))
+                  ))}
+                </>
               )}
             </div>
           </div>
@@ -583,6 +786,31 @@ export default function AlertCenterPage() {
           </div>
         )}
 
+        {showBatchDeleteConfirm && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-[#1e293b] rounded-xl p-6 w-full max-w-sm border border-slate-600">
+              <h3 className="text-lg font-semibold mb-4">确认批量删除</h3>
+              <p className="text-slate-300 mb-6">
+                确定要删除选中的 <span className="text-red-400 font-semibold">{selectedRuleIds.size}</span> 条规则吗？此操作不可撤销。
+              </p>
+              <div className="flex gap-2 justify-end">
+                <button
+                  onClick={() => setShowBatchDeleteConfirm(false)}
+                  className="px-4 py-2 bg-slate-600 rounded hover:bg-slate-500 text-sm"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={handleBatchDelete}
+                  className="px-4 py-2 bg-red-600 rounded hover:bg-red-700 text-sm"
+                >
+                  确认删除
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {showCreateModal && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
             <div className="bg-[#1e293b] rounded-xl p-6 w-full max-w-lg border border-slate-600 max-h-[90vh] overflow-y-auto">
@@ -690,6 +918,114 @@ export default function AlertCenterPage() {
                       <option key={s.value} value={s.value}>{s.label}</option>
                     ))}
                   </select>
+                </div>
+
+                <div className="border-t border-slate-700 pt-4">
+                  <label className="block text-sm text-slate-400 mb-2">静默时段</label>
+                  <p className="text-xs text-slate-500 mb-3">在静默时段内，即使规则条件满足也不会触发告警</p>
+
+                  {form.silence_periods.length > 0 && (
+                    <div className="space-y-2 mb-3">
+                      {form.silence_periods.map((period, index) => (
+                        <div
+                          key={index}
+                          className="flex items-center justify-between px-3 py-2 bg-[#0f172a] border border-slate-600 rounded text-sm"
+                        >
+                          <span className="text-slate-300">{formatSilencePeriod(period)}</span>
+                          <button
+                            onClick={() => removeSilencePeriod(index)}
+                            className="text-red-400 hover:text-red-300 text-xs ml-2"
+                          >
+                            删除
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="p-3 bg-[#0f172a] border border-slate-700 rounded space-y-3">
+                    <div className="flex gap-2">
+                      <div className="flex-1">
+                        <label className="block text-xs text-slate-500 mb-1">重复模式</label>
+                        <select
+                          value={newSilencePeriod.repeat_mode}
+                          onChange={e => setNewSilencePeriod({
+                            ...newSilencePeriod,
+                            repeat_mode: e.target.value as 'daily' | 'weekly' | 'once',
+                          })}
+                          className="w-full px-2 py-1.5 bg-[#1e293b] border border-slate-600 rounded text-sm text-slate-100 focus:outline-none focus:border-blue-500"
+                        >
+                          {REPEAT_MODE_OPTIONS.map(o => (
+                            <option key={o.value} value={o.value}>{o.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                      {newSilencePeriod.repeat_mode === 'weekly' && (
+                        <div className="flex-1">
+                          <label className="block text-xs text-slate-500 mb-1">星期</label>
+                          <select
+                            value={newSilencePeriod.weekday ?? ''}
+                            onChange={e => setNewSilencePeriod({
+                              ...newSilencePeriod,
+                              weekday: e.target.value !== '' ? Number(e.target.value) : undefined,
+                            })}
+                            className="w-full px-2 py-1.5 bg-[#1e293b] border border-slate-600 rounded text-sm text-slate-100 focus:outline-none focus:border-blue-500"
+                          >
+                            <option value="">选择星期</option>
+                            {WEEKDAY_OPTIONS.map(w => (
+                              <option key={w.value} value={w.value}>{w.label}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                      {newSilencePeriod.repeat_mode === 'once' && (
+                        <div className="flex-1">
+                          <label className="block text-xs text-slate-500 mb-1">日期</label>
+                          <input
+                            type="date"
+                            value={newSilencePeriod.date || ''}
+                            onChange={e => setNewSilencePeriod({
+                              ...newSilencePeriod,
+                              date: e.target.value,
+                            })}
+                            className="w-full px-2 py-1.5 bg-[#1e293b] border border-slate-600 rounded text-sm text-slate-100 focus:outline-none focus:border-blue-500"
+                          />
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      <div className="flex-1">
+                        <label className="block text-xs text-slate-500 mb-1">开始时间</label>
+                        <input
+                          type="time"
+                          value={newSilencePeriod.start_time}
+                          onChange={e => setNewSilencePeriod({
+                            ...newSilencePeriod,
+                            start_time: e.target.value,
+                          })}
+                          className="w-full px-2 py-1.5 bg-[#1e293b] border border-slate-600 rounded text-sm text-slate-100 focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
+                      <div className="flex-1">
+                        <label className="block text-xs text-slate-500 mb-1">结束时间</label>
+                        <input
+                          type="time"
+                          value={newSilencePeriod.end_time}
+                          onChange={e => setNewSilencePeriod({
+                            ...newSilencePeriod,
+                            end_time: e.target.value,
+                          })}
+                          className="w-full px-2 py-1.5 bg-[#1e293b] border border-slate-600 rounded text-sm text-slate-100 focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
+                    </div>
+                    <button
+                      onClick={addSilencePeriod}
+                      className="w-full px-3 py-1.5 text-xs bg-slate-700 hover:bg-slate-600 rounded font-medium"
+                    >
+                      + 添加静默时段
+                    </button>
+                  </div>
                 </div>
 
                 <div className="flex gap-2 justify-end pt-4">
