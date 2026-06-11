@@ -7,6 +7,7 @@ from app.routers.engine_router import router as engine_router
 from app.routers.collab_router import router as collab_router
 from app.routers.monitoring_router import router as monitoring_router
 from app.routers.monitoring_router import ws_router as monitoring_ws_router
+from app.routers.schedule_router import router as schedule_router
 
 __all__ = [
     "auth_router",
@@ -18,4 +19,5 @@ __all__ = [
     "monitoring_ws_router",
     "engine_router",
     "collab_router",
+    "schedule_router",
 ]

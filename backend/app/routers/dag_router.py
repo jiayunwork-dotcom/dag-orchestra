@@ -3,7 +3,7 @@ from collections import defaultdict
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_current_user, require_role, UserRole
@@ -349,6 +349,10 @@ async def delete_dag(dag_id: str, user: User = Depends(require_role(UserRole.ADM
     from app.routers.alert_router import _invalidate_rules_for_dag
     await _invalidate_rules_for_dag(db, dag_id, "关联的DAG已被删除")
 
+    from app.models import SchedulePlan, ExecutionRecord
+    await db.execute(delete(ExecutionRecord).where(ExecutionRecord.dag_id == dag_id))
+    await db.execute(delete(SchedulePlan).where(SchedulePlan.dag_id == dag_id))
+
     await db.delete(dag)
     await db.commit()
 
@@ -445,6 +449,14 @@ async def stop_dag(dag_id: str, user: User = Depends(get_current_user), db: Asyn
         raise HTTPException(status_code=404, detail="DAG not found")
     dag.status = DAGStatus.STOPPED
     dag.updated_at = datetime.utcnow()
+
+    from app.models import SchedulePlan
+    plan_result = await db.execute(select(SchedulePlan).where(SchedulePlan.dag_id == dag_id))
+    plan = plan_result.scalar_one_or_none()
+    if plan and plan.enabled:
+        plan.enabled = False
+        plan.updated_at = datetime.utcnow()
+
     await db.commit()
     return {"status": dag.status.value}
 

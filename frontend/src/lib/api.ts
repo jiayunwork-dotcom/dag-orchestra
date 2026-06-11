@@ -98,4 +98,18 @@ export const engineApi = {
     api.get(`/engine/${dagId}/nodes/${nodeId}/logs`, { params: level ? { level } : {} }),
 };
 
+export const scheduleApi = {
+  getPlan: (dagId: string) => api.get(`/schedules/plans/${dagId}`),
+  createPlan: (dagId: string, data: any) => api.post(`/schedules/plans/${dagId}`, data),
+  updatePlan: (dagId: string, data: any) => api.put(`/schedules/plans/${dagId}`, data),
+  deletePlan: (dagId: string) => api.delete(`/schedules/plans/${dagId}`),
+  manualTrigger: (dagId: string) => api.post(`/schedules/trigger/${dagId}`),
+  listExecutions: (dagId: string, params?: { status?: string; page?: number; page_size?: number }) =>
+    api.get(`/schedules/executions/${dagId}`, { params }),
+  getExecutionDetail: (executionId: string) => api.get(`/schedules/execution/${executionId}`),
+  getOverview: () => api.get('/schedules/overview'),
+  listAllSchedules: (params?: { dag_name?: string; enabled?: boolean }) =>
+    api.get('/schedules/list', { params }),
+};
+
 export default api;

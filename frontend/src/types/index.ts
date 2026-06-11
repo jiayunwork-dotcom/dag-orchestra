@@ -262,6 +262,62 @@ export interface EdgeThroughputMap {
   [edgeId: string]: number;
 }
 
+export interface SchedulePlan {
+  id: string;
+  dag_id: string;
+  dag_name?: string;
+  cron_expression: string;
+  enabled: boolean;
+  max_concurrency: number;
+  timeout_seconds: number;
+  retry_count: number;
+  retry_interval: number;
+  next_trigger_time?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ExecutionRecord {
+  id: string;
+  dag_id: string;
+  schedule_plan_id?: string;
+  trigger_type: 'scheduled' | 'manual' | 'retry';
+  status: 'running' | 'success' | 'failed' | 'retrying';
+  retry_attempt: number;
+  parent_execution_id?: string;
+  error_message?: string;
+  triggered_at: string;
+  finished_at?: string;
+  duration_seconds?: number;
+  is_retry: boolean;
+  retry_label?: string;
+}
+
+export interface ExecutionListResponse {
+  items: ExecutionRecord[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface ScheduleOverview {
+  today_triggers: number;
+  today_success_rate: number;
+  running_count: number;
+  last_failed_dag_name?: string;
+  last_failed_time?: string;
+}
+
+export interface ScheduleListItem {
+  plan_id: string;
+  dag_id: string;
+  dag_name: string;
+  cron_expression: string;
+  enabled: boolean;
+  next_trigger_time?: string;
+  last_execution_status?: string;
+}
+
 export const NODE_CATEGORIES = {
   source: {
     label: '数据源',

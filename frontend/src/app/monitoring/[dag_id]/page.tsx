@@ -182,6 +182,7 @@ export default function MonitoringPage() {
         </div>
         <div className="flex items-center gap-2">
           <button onClick={() => router.push('/alerts')} className="px-3 py-1.5 text-sm bg-slate-600 rounded hover:bg-slate-500">告警中心</button>
+          <button onClick={() => router.push('/schedules')} className="px-3 py-1.5 text-sm bg-slate-600 rounded hover:bg-slate-500">调度管理</button>
           <button onClick={() => router.push(`/editor/${dagId}`)} className="px-3 py-1.5 text-sm bg-slate-600 rounded hover:bg-slate-500">编辑器</button>
           {engineStatus?.running ? (
             <button onClick={handleStop} className="px-3 py-1.5 text-sm bg-red-600 rounded hover:bg-red-700">停止</button>

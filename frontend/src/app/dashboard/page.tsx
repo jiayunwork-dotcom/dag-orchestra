@@ -2,8 +2,8 @@
 
 import { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { dagApi, monitoringApi } from '@/lib/api';
-import { DAGInfo, DashboardStats, AlertPushMessage } from '@/types';
+import { dagApi, monitoringApi, scheduleApi } from '@/lib/api';
+import { DAGInfo, DashboardStats, AlertPushMessage, ScheduleOverview } from '@/types';
 import toast from 'react-hot-toast';
 import { Toaster } from 'react-hot-toast';
 
@@ -11,6 +11,7 @@ export default function DashboardPage() {
   const router = useRouter();
   const [dags, setDags] = useState<DAGInfo[]>([]);
   const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [scheduleOverview, setScheduleOverview] = useState<ScheduleOverview | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState('');
   const [newDesc, setNewDesc] = useState('');
@@ -90,9 +91,14 @@ export default function DashboardPage() {
 
   const loadData = async () => {
     try {
-      const [dagRes, statsRes] = await Promise.all([dagApi.list(), monitoringApi.dashboard()]);
+      const [dagRes, statsRes, scheduleRes] = await Promise.all([
+        dagApi.list(),
+        monitoringApi.dashboard(),
+        scheduleApi.getOverview(),
+      ]);
       setDags(dagRes.data);
       setStats(statsRes.data);
+      setScheduleOverview(scheduleRes.data);
     } catch {}
   };
 
@@ -155,6 +161,12 @@ export default function DashboardPage() {
             告警中心
           </button>
           <button
+            onClick={() => router.push('/schedules')}
+            className="px-3 py-1.5 text-sm bg-slate-600 rounded hover:bg-slate-500"
+          >
+            调度管理
+          </button>
+          <button
             onClick={() => { localStorage.removeItem('token'); router.push('/login'); }}
             className="px-3 py-1.5 text-sm bg-slate-600 rounded hover:bg-slate-500"
           >
@@ -178,6 +190,36 @@ export default function DashboardPage() {
                 <div className={`text-2xl font-bold mt-1 ${s.color}`}>{s.value}</div>
               </div>
             ))}
+          </div>
+        )}
+
+        {scheduleOverview && (
+          <div
+            className="mt-4 mb-8 bg-[#1e293b] rounded-lg border border-slate-700 p-4 cursor-pointer hover:border-blue-500 transition-colors"
+            onClick={() => router.push('/schedules')}
+          >
+            <h3 className="text-sm font-semibold text-slate-300 mb-3">调度概览</h3>
+            <div className="grid grid-cols-4 gap-4">
+              <div>
+                <div className="text-slate-400 text-xs">今日触发</div>
+                <div className="text-xl font-bold text-blue-400">{scheduleOverview.today_triggers}</div>
+              </div>
+              <div>
+                <div className="text-slate-400 text-xs">今日成功率</div>
+                <div className="text-xl font-bold text-green-400">{scheduleOverview.today_success_rate}%</div>
+              </div>
+              <div>
+                <div className="text-slate-400 text-xs">运行中任务</div>
+                <div className="text-xl font-bold text-cyan-400">{scheduleOverview.running_count}</div>
+              </div>
+              <div>
+                <div className="text-slate-400 text-xs">最近失败</div>
+                <div className="text-sm font-bold text-red-400">{scheduleOverview.last_failed_dag_name || '无'}</div>
+                {scheduleOverview.last_failed_time && (
+                  <div className="text-xs text-slate-500">{new Date(scheduleOverview.last_failed_time).toLocaleString('zh-CN')}</div>
+                )}
+              </div>
+            </div>
           </div>
         )}
 

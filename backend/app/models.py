@@ -165,3 +165,53 @@ class Checkpoint(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (Index("ix_checkpoint_dag", "dag_id", "created_at"),)
+
+
+class SchedulePlan(Base):
+    __tablename__ = "schedule_plans"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    dag_id = Column(String, ForeignKey("dags.id", ondelete="CASCADE"), nullable=False, unique=True)
+    cron_expression = Column(String(100), nullable=False)
+    enabled = Column(Boolean, default=True)
+    max_concurrency = Column(Integer, default=1)
+    timeout_seconds = Column(Integer, default=3600)
+    retry_count = Column(Integer, default=0)
+    retry_interval = Column(Integer, default=60)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    dag = relationship("DAG", backref="schedule_plan")
+
+
+class ExecutionStatus(str, enum.Enum):
+    RUNNING = "running"
+    SUCCESS = "success"
+    FAILED = "failed"
+    RETRYING = "retrying"
+
+
+class TriggerType(str, enum.Enum):
+    SCHEDULED = "scheduled"
+    MANUAL = "manual"
+    RETRY = "retry"
+
+
+class ExecutionRecord(Base):
+    __tablename__ = "execution_records"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    dag_id = Column(String, ForeignKey("dags.id", ondelete="CASCADE"), nullable=False)
+    schedule_plan_id = Column(String, ForeignKey("schedule_plans.id", ondelete="SET NULL"), nullable=True)
+    trigger_type = Column(Enum(TriggerType), default=TriggerType.SCHEDULED)
+    status = Column(Enum(ExecutionStatus), default=ExecutionStatus.RUNNING)
+    retry_attempt = Column(Integer, default=0)
+    parent_execution_id = Column(String, nullable=True)
+    error_message = Column(Text, nullable=True)
+    triggered_at = Column(DateTime, default=datetime.utcnow)
+    finished_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("ix_execution_dag_status", "dag_id", "status"),
+        Index("ix_execution_triggered", "dag_id", "triggered_at"),
+    )

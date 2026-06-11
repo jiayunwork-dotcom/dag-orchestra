@@ -448,6 +448,12 @@ export default function AlertCenterPage() {
             仪表盘
           </button>
           <button
+            onClick={() => router.push('/schedules')}
+            className="px-3 py-1.5 text-sm bg-slate-600 rounded hover:bg-slate-500"
+          >
+            调度管理
+          </button>
+          <button
             onClick={() => { localStorage.removeItem('token'); router.push('/login'); }}
             className="px-3 py-1.5 text-sm bg-slate-600 rounded hover:bg-slate-500"
           >

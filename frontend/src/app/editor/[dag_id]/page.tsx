@@ -41,6 +41,7 @@ import ConfigPanel from '@/components/ConfigPanel';
 import VersionPanel from '@/components/VersionPanel';
 import AlertPanel from '@/components/AlertPanel';
 import CommentPanel from '@/components/CommentPanel';
+import SchedulePanel from '@/components/SchedulePanel';
 
 function getLatencyColor(latencyMs: number): string {
   if (latencyMs < 100) return '#22c55e';
@@ -223,6 +224,7 @@ export default function EditorPage() {
   const [showVersions, setShowVersions] = useState(false);
   const [showAlerts, setShowAlerts] = useState(false);
   const [showComments, setShowComments] = useState(false);
+  const [showSchedule, setShowSchedule] = useState(false);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const collabWsRef = useRef<WebSocket | null>(null);
@@ -645,6 +647,7 @@ export default function EditorPage() {
 
         <div className="flex items-center gap-2">
           <button onClick={() => router.push('/alerts')} className="px-3 py-1.5 text-xs bg-slate-600 hover:bg-slate-500 rounded">告警中心</button>
+          <button onClick={() => router.push('/schedules')} className="px-3 py-1.5 text-xs bg-slate-600 hover:bg-slate-500 rounded">调度管理</button>
           <button onClick={handleValidate} className="px-3 py-1.5 text-xs bg-slate-600 hover:bg-slate-500 rounded">验证</button>
           <button onClick={handleAutoLayout} className="px-3 py-1.5 text-xs bg-slate-600 hover:bg-slate-500 rounded">自动布局</button>
           <button onClick={handleSave} className="px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-700 rounded">保存 (Ctrl+S)</button>
@@ -674,6 +677,7 @@ export default function EditorPage() {
           <button onClick={() => setShowVersions(!showVersions)} className="px-3 py-1.5 text-xs bg-slate-600 hover:bg-slate-500 rounded">版本</button>
           <button onClick={() => setShowAlerts(!showAlerts)} className="px-3 py-1.5 text-xs bg-slate-600 hover:bg-slate-500 rounded">告警</button>
           <button onClick={() => setShowComments(!showComments)} className="px-3 py-1.5 text-xs bg-slate-600 hover:bg-slate-500 rounded">评论</button>
+          <button onClick={() => setShowSchedule(!showSchedule)} className="px-3 py-1.5 text-xs bg-slate-600 hover:bg-slate-500 rounded">调度</button>
         </div>
       </div>
 
@@ -789,6 +793,7 @@ export default function EditorPage() {
       }} />}
       {showAlerts && <AlertPanel dagId={dagId} onClose={() => setShowAlerts(false)} />}
       {showComments && <CommentPanel dagId={dagId} onClose={() => setShowComments(false)} />}
+      {showSchedule && <SchedulePanel dagId={dagId} dagStatus={dagStatus} onClose={() => setShowSchedule(false)} />}
     </div>
   );
 }

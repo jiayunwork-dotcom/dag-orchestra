@@ -364,3 +364,78 @@ class BatchOperationResult(BaseModel):
     updated_count: int
     skipped_count: int
     skipped_reason: Optional[str] = None
+
+
+class SchedulePlanCreate(BaseModel):
+    cron_expression: str
+    enabled: bool = True
+    max_concurrency: int = Field(default=1, ge=1, le=5)
+    timeout_seconds: int = Field(default=3600, ge=1)
+    retry_count: int = Field(default=0, ge=0, le=3)
+    retry_interval: int = Field(default=60, ge=1)
+
+
+class SchedulePlanUpdate(BaseModel):
+    cron_expression: Optional[str] = None
+    enabled: Optional[bool] = None
+    max_concurrency: Optional[int] = Field(default=None, ge=1, le=5)
+    timeout_seconds: Optional[int] = Field(default=None, ge=1)
+    retry_count: Optional[int] = Field(default=None, ge=0, le=3)
+    retry_interval: Optional[int] = Field(default=None, ge=1)
+
+
+class SchedulePlanOut(BaseModel):
+    id: str
+    dag_id: str
+    dag_name: Optional[str] = None
+    cron_expression: str
+    enabled: bool
+    max_concurrency: int
+    timeout_seconds: int
+    retry_count: int
+    retry_interval: int
+    next_trigger_time: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ExecutionRecordOut(BaseModel):
+    id: str
+    dag_id: str
+    schedule_plan_id: Optional[str] = None
+    trigger_type: str
+    status: str
+    retry_attempt: int
+    parent_execution_id: Optional[str] = None
+    error_message: Optional[str] = None
+    triggered_at: datetime
+    finished_at: Optional[datetime] = None
+    duration_seconds: Optional[float] = None
+    is_retry: bool = False
+    retry_label: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
+class ExecutionRecordDetail(ExecutionRecordOut):
+    pass
+
+
+class ScheduleOverview(BaseModel):
+    today_triggers: int
+    today_success_rate: float
+    running_count: int
+    last_failed_dag_name: Optional[str] = None
+    last_failed_time: Optional[datetime] = None
+
+
+class ScheduleListItem(BaseModel):
+    plan_id: str
+    dag_id: str
+    dag_name: str
+    cron_expression: str
+    enabled: bool
+    next_trigger_time: Optional[datetime] = None
+    last_execution_status: Optional[str] = None
